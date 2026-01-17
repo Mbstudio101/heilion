@@ -6,19 +6,29 @@ let wakeSocket = null;
 let isPausedForSpeaking = false;
 let speakStartUnsubscribe = null;
 let speakEndUnsubscribe = null;
+let connectionAttempted = false;
+let connectionErrorLogged = false;
 
 export async function startWakeListener() {
   if (wakeListenerActive) {
     return { success: true, alreadyActive: true };
   }
 
+  // Don't spam errors if the sidecar isn't running
+  if (connectionAttempted && !wakeListenerActive) {
+    // Already tried and failed - don't retry silently
+    return { success: false, error: 'Wake word service not available' };
+  }
+
   try {
+    connectionAttempted = true;
     // Connect to wake word service WebSocket
     wakeSocket = new WebSocket('ws://localhost:8765');
     
     wakeSocket.onopen = () => {
       wakeListenerActive = true;
-      console.log('Wake listener started');
+      connectionErrorLogged = false; // Reset error flag on success
+      console.log('✓ Wake word listener connected');
     };
 
     wakeSocket.onmessage = (event) => {
@@ -35,13 +45,23 @@ export async function startWakeListener() {
     };
 
     wakeSocket.onerror = (error) => {
-      console.error('Wake word WebSocket error:', error);
+      // Only log error once to avoid console spam
+      if (!connectionErrorLogged) {
+        connectionErrorLogged = true;
+        console.warn('⚠ Wake word service not available (push-to-talk mode will be used)');
+      }
       wakeListenerActive = false;
     };
 
     wakeSocket.onclose = () => {
       wakeListenerActive = false;
-      console.log('Wake listener stopped');
+      // Only log if we were previously connected
+      if (connectionErrorLogged) {
+        // Connection was never established, don't log
+        return;
+      }
+      // Connection was established and then closed
+      console.log('Wake word listener disconnected');
     };
 
     // Listen for speak events to pause wake detection

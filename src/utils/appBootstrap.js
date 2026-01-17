@@ -150,15 +150,12 @@ async function checkCloudKeys() {
 }
 
 async function checkInternet() {
+  // Use navigator.onLine instead of fetch to avoid CSP violations
+  // This checks if the browser thinks it's online (not 100% accurate but good enough)
   try {
-    const response = await fetch('https://www.google.com', { 
-      method: 'HEAD',
-      mode: 'no-cors',
-      cache: 'no-cache'
-    });
-    return true;
+    return navigator.onLine !== false;
   } catch {
-    return false;
+    return true; // Assume online if we can't check
   }
 }
 
@@ -170,7 +167,7 @@ export function applyPreset(preset) {
       providerPreset: 'offline',
       sttProvider: 'local',
       llmProvider: 'local',
-      ttsProvider: 'local',
+      ttsProvider: 'soprano_local',
       sttFallback: false,
       llmFallback: false
     });
@@ -179,7 +176,7 @@ export function applyPreset(preset) {
       providerPreset: 'accuracy',
       sttProvider: 'cloud',
       llmProvider: 'cloud',
-      ttsProvider: 'local',
+      ttsProvider: 'elevenlabs_cloud', // Use ElevenLabs for best quality
       sttFallback: true, // Fallback to local if cloud fails
       llmFallback: true
     });
@@ -210,7 +207,7 @@ function getDefaultSettings() {
     providerPreset: 'offline',
     sttProvider: 'local',
     llmProvider: 'local',
-    ttsProvider: 'local',
+    ttsProvider: 'soprano_local', // 'soprano_local' | 'elevenlabs_cloud' | 'openai_cloud'
     sttFallback: false,
     llmFallback: false,
     wakeWordEnabled: true,
@@ -218,11 +215,11 @@ function getDefaultSettings() {
     difficulty: 'medium',
     ollamaModel: 'llama2',
     ollamaUrl: 'http://localhost:11434',
-    // Multilingual TTS settings
-    ttsProvider: 'web-speech', // 'web-speech' or 'soprano' (Soprano is English-only)
+    // Voice Catalog settings
     ttsLanguage: 'en',
-    ttsVoice: null, // null = auto-select best voice
-    ttsGender: null, // null = auto, 'female', 'male'
+    voiceId: null, // Voice ID for cloud providers or model variant for Soprano
+    presetId: null, // Soprano preset: 'calm' | 'balanced' | 'expressive'
+    autoVoiceByPersona: false, // Automatically select voice based on persona
     ttsRate: 1.0, // 0.1 to 10
     ttsPitch: 1.0, // 0 to 2
     ttsVolume: 1.0 // 0 to 1

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getSettings, updateSettings, applyPreset, healthCheckAll, autoDetectOllama } from '../utils/appBootstrap';
-import { getDeckLibrary } from '../utils/deckManager';
-import { getAvailableLanguages, getAvailableVoices } from '../utils/ttsManager';
+import { getDeckLibrary, deleteDeck } from '../utils/deckManager';
+import { getAvailableLanguages, getAvailableVoices, listTTSProviders, listVoices, setVoiceSelection, testVoice } from '../utils/ttsManager';
 import './SettingsPanel.css';
 
 const PERSONAS = [
@@ -30,6 +30,11 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
   const [ttsLanguages, setTtsLanguages] = useState([]);
   const [ttsVoices, setTtsVoices] = useState([]);
   const [sopranoAvailable, setSopranoAvailable] = useState(false);
+  const [availableTtsProviders, setAvailableTtsProviders] = useState([]);
+  const [availableVoices, setAvailableVoices] = useState([]);
+  const [availablePresets, setAvailablePresets] = useState([]);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [testingVoice, setTestingVoice] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -37,8 +42,16 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
       loadSettings();
       loadCourses();
       loadTtsLanguages();
+      loadTtsProviders();
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    // Load voices when provider changes
+    if (isOpen && settings.ttsProvider) {
+      loadVoicesForProvider(settings.ttsProvider);
+    }
+  }, [settings.ttsProvider, isOpen]);
   
   useEffect(() => {
     // Reload voices when language changes
@@ -150,6 +163,43 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
       console.error('Failed to load courses:', error);
     }
   };
+
+  const handleDeleteCourse = async (courseId, courseName) => {
+    // Confirm deletion
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${courseName}"?\n\nThis will permanently remove the course and all its slides, questions, and progress. This action cannot be undone.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const result = await deleteDeck(courseId);
+      if (result.success) {
+        // Reload courses list
+        await loadCourses();
+        
+        // If deleted course was the active one, clear it
+        if (currentCourseId === courseId && onCourseChange) {
+          // Set to first remaining course or null
+          const remainingCourses = courses.filter(c => c.id !== courseId);
+          if (remainingCourses.length > 0) {
+            onCourseChange(remainingCourses[0].id);
+          } else {
+            onCourseChange(null);
+          }
+        }
+        
+        alert('Course deleted successfully');
+      } else {
+        alert(`Failed to delete course: ${result.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Delete course failed:', error);
+      alert(`Error deleting course: ${error.message}`);
+    }
+  };
   
   const loadTtsLanguages = () => {
     const languages = getAvailableLanguages();
@@ -159,6 +209,47 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
   const loadTtsVoices = (lang) => {
     const voices = getAvailableVoices(lang);
     setTtsVoices(voices);
+  };
+
+  const loadTtsProviders = async () => {
+    const providers = listTTSProviders();
+    setAvailableTtsProviders(providers);
+  };
+
+  const loadVoicesForProvider = async (provider) => {
+    setLoadingVoices(true);
+    try {
+      const result = await listVoices(provider);
+      if (result.success) {
+        setAvailableVoices(result.voices || []);
+        setAvailablePresets(result.presets || []);
+      } else {
+        setAvailableVoices([]);
+        setAvailablePresets([]);
+      }
+    } catch (error) {
+      console.error('Failed to load voices:', error);
+      setAvailableVoices([]);
+      setAvailablePresets([]);
+    } finally {
+      setLoadingVoices(false);
+    }
+  };
+
+  const handleTestVoice = async () => {
+    setTestingVoice(true);
+    try {
+      const result = await testVoice('Hello, this is a test of the voice selection. How does it sound?');
+      if (!result.success) {
+        // Show error message in a more user-friendly way
+        const errorMsg = result.error || 'Voice test failed. Please check your settings and try again.';
+        alert(errorMsg);
+      }
+    } catch (error) {
+      alert(`Voice test error: ${error.message || 'Unknown error occurred'}`);
+    } finally {
+      setTestingVoice(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -291,11 +382,17 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
 
           <div className="settings-section">
             <h3>Text-to-Speech</h3>
+            
+            {/* Provider Selection */}
             <label className="settings-label" style={{ display: 'block', marginBottom: '8px' }}>
-              TTS Engine
+              TTS Provider
               <select
-                value={settings.ttsProvider || 'web-speech'}
-                onChange={(e) => saveSettings({ ttsProvider: e.target.value })}
+                value={settings.ttsProvider || 'soprano_local'}
+                onChange={async (e) => {
+                  const newProvider = e.target.value;
+                  saveSettings({ ttsProvider: newProvider, voiceId: null, presetId: null });
+                  await loadVoicesForProvider(newProvider);
+                }}
                 style={{
                   width: '100%',
                   background: '#222',
@@ -308,92 +405,121 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
                   boxSizing: 'border-box'
                 }}
               >
-                <option value="web-speech">Web Speech API (Multilingual)</option>
-                <option value="soprano">Soprano TTS (English, Ultra-High Quality)</option>
-              </select>
-              <p style={{ fontSize: '11px', color: sopranoAvailable ? '#4CAF50' : '#888', marginTop: '4px', marginBottom: '8px' }}>
-                {settings.ttsProvider === 'soprano' 
-                  ? sopranoAvailable
-                    ? '✓ Soprano TTS is available and ready. Ultra-realistic, expressive English speech.'
-                    : 'Soprano TTS requires Python 3.10+ and soprano-tts package. App will automatically use Web Speech API if Soprano is not available.'
-                  : 'Web Speech API supports multiple languages and uses system voices. Works immediately without installation.'}
-              </p>
-            </label>
-            
-            <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
-              Language
-              <select
-                value={settings.ttsLanguage || 'en'}
-                onChange={(e) => saveSettings({ ttsLanguage: e.target.value, ttsVoice: null })}
-                style={{
-                  width: '100%',
-                  background: '#222',
-                  color: '#fff',
-                  border: '1px solid #444',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  marginTop: '4px',
-                  boxSizing: 'border-box'
-                }}
-              >
-                {ttsLanguages.map((lang) => (
-                  <option key={lang} value={lang}>
-                    {lang === 'en' ? 'English' : lang === 'es' ? 'Spanish' : lang === 'fr' ? 'French' : lang === 'de' ? 'German' : lang === 'it' ? 'Italian' : lang === 'pt' ? 'Portuguese' : lang === 'zh' ? 'Chinese' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang === 'ru' ? 'Russian' : lang.toUpperCase()}
+                {availableTtsProviders.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
                   </option>
                 ))}
               </select>
             </label>
             
-            <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
-              Voice
-              <select
-                value={settings.ttsVoice || ''}
-                onChange={(e) => saveSettings({ ttsVoice: e.target.value || null })}
-                style={{
-                  width: '100%',
-                  background: '#222',
-                  color: '#fff',
-                  border: '1px solid #444',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  marginTop: '4px',
-                  boxSizing: 'border-box'
-                }}
-              >
-                <option value="">Auto-select best voice</option>
-                {ttsVoices.map((voice) => (
-                  <option key={voice.name} value={voice.name}>
-                    {voice.name} ({voice.lang})
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* Voice Selection (varies by provider) */}
+            {settings.ttsProvider && (
+              <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
+                Voice
+                <select
+                  value={settings.voiceId || ''}
+                  onChange={(e) => saveSettings({ voiceId: e.target.value || null })}
+                  disabled={loadingVoices}
+                  style={{
+                    width: '100%',
+                    background: '#222',
+                    color: '#fff',
+                    border: '1px solid #444',
+                    padding: '8px',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                    marginTop: '4px',
+                    boxSizing: 'border-box',
+                    opacity: loadingVoices ? 0.5 : 1
+                  }}
+                >
+                  <option value="">{loadingVoices ? 'Loading voices...' : 'Select a voice'}</option>
+                  {availableVoices.map((voice) => (
+                    <option key={voice.id} value={voice.id}>
+                      {voice.name} {voice.description ? `- ${voice.description}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             
-            <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
-              Gender Preference
-              <select
-                value={settings.ttsGender || ''}
-                onChange={(e) => saveSettings({ ttsGender: e.target.value || null })}
-                style={{
-                  width: '100%',
-                  background: '#222',
-                  color: '#fff',
-                  border: '1px solid #444',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  marginTop: '4px',
-                  boxSizing: 'border-box'
-                }}
-              >
-                <option value="">Auto</option>
-                <option value="female">Female</option>
-                <option value="male">Male</option>
-              </select>
-            </label>
+            {/* Preset Selection (Soprano only) */}
+            {settings.ttsProvider === 'soprano_local' && availablePresets.length > 0 && (
+              <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
+                Preset
+                <select
+                  value={settings.presetId || 'balanced'}
+                  onChange={(e) => saveSettings({ presetId: e.target.value || null })}
+                  style={{
+                    width: '100%',
+                    background: '#222',
+                    color: '#fff',
+                    border: '1px solid #444',
+                    padding: '8px',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                    marginTop: '4px',
+                    boxSizing: 'border-box'
+                  }}
+                >
+                  {availablePresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name} - {preset.description}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             
+            {/* API Key Input (for cloud providers) */}
+            {(settings.ttsProvider === 'elevenlabs_cloud' || settings.ttsProvider === 'openai_cloud') && (
+              <div style={{ marginTop: '12px' }}>
+                <label className="settings-label" style={{ display: 'block', marginBottom: '4px' }}>
+                  API Key
+                  <input
+                    type="password"
+                    placeholder={`Enter ${settings.ttsProvider === 'elevenlabs_cloud' ? 'ElevenLabs' : 'OpenAI'} API key`}
+                    onBlur={async (e) => {
+                      if (e.target.value) {
+                        await handleSaveApiKey(settings.ttsProvider === 'elevenlabs_cloud' ? 'elevenlabs' : 'openai', e.target.value);
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      background: '#222',
+                      color: '#fff',
+                      border: '1px solid #444',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                      marginTop: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </label>
+                <button
+                  onClick={loadVoicesForProvider.bind(null, settings.ttsProvider)}
+                  disabled={loadingVoices}
+                  style={{
+                    width: '100%',
+                    background: '#333',
+                    color: '#fff',
+                    border: '1px solid #555',
+                    padding: '6px 12px',
+                    borderRadius: '4px',
+                    cursor: loadingVoices ? 'not-allowed' : 'pointer',
+                    fontSize: '12px',
+                    marginTop: '8px',
+                    opacity: loadingVoices ? 0.5 : 1
+                  }}
+                >
+                  {loadingVoices ? 'Loading...' : 'Refresh Voices'}
+                </button>
+              </div>
+            )}
+            
+            {/* Rate Slider */}
             <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
               Speed: {settings.ttsRate || 1.0}x
               <input
@@ -407,18 +533,38 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
               />
             </label>
             
-            <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
-              Pitch: {settings.ttsPitch || 1.0}
-              <input
-                type="range"
-                min="0"
-                max="2"
-                step="0.1"
-                value={settings.ttsPitch || 1.0}
-                onChange={(e) => saveSettings({ ttsPitch: parseFloat(e.target.value) })}
-                style={{ width: '100%', marginTop: '4px' }}
-              />
-            </label>
+            {/* Test Voice Button */}
+            <button
+              onClick={handleTestVoice}
+              disabled={testingVoice || !settings.ttsProvider}
+              style={{
+                width: '100%',
+                background: testingVoice ? '#444' : '#0066ff',
+                color: '#fff',
+                border: 'none',
+                padding: '10px',
+                borderRadius: '6px',
+                fontSize: '14px',
+                cursor: testingVoice || !settings.ttsProvider ? 'not-allowed' : 'pointer',
+                marginTop: '16px',
+                fontWeight: '500'
+              }}
+            >
+              {testingVoice ? 'Testing...' : 'Test Voice'}
+            </button>
+            
+            {/* Status Messages */}
+            <p style={{ fontSize: '11px', color: sopranoAvailable ? '#4CAF50' : '#888', marginTop: '8px', marginBottom: '8px' }}>
+              {settings.ttsProvider === 'soprano_local'
+                ? sopranoAvailable
+                  ? '✓ Soprano TTS is available and ready. Ultra-realistic, expressive English speech.'
+                  : 'Soprano TTS requires Python 3.10+ and soprano-tts package. App will automatically use Web Speech API if Soprano is not available.'
+                : settings.ttsProvider === 'elevenlabs_cloud'
+                ? 'ElevenLabs cloud TTS with premium voices. Requires API key.'
+                : settings.ttsProvider === 'openai_cloud'
+                ? 'OpenAI text-to-speech API. Requires API key.'
+                : 'Select a TTS provider'}
+            </p>
           </div>
 
           <div className="settings-section">
@@ -488,7 +634,8 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
                     padding: '10px',
                     borderRadius: '6px',
                     fontSize: '14px',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    marginBottom: '12px'
                   }}
                 >
                   {courses.map((course) => (
@@ -497,8 +644,47 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
                     </option>
                   ))}
                 </select>
-                <p className="settings-hint" style={{ marginTop: '8px', color: '#666', fontSize: '12px' }}>
-                  Switch between courses
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '8px' }}>
+                  {courses.map((course) => (
+                    <div 
+                      key={course.id} 
+                      style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        background: '#1a1a1a',
+                        borderRadius: '6px',
+                        border: '1px solid #333'
+                      }}
+                    >
+                      <span style={{ color: '#ccc', fontSize: '13px', flex: 1 }}>
+                        {course.name}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteCourse(course.id, course.name)}
+                        style={{
+                          background: '#d32f2f',
+                          color: '#fff',
+                          border: 'none',
+                          padding: '6px 14px',
+                          borderRadius: '4px',
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                          transition: 'background 0.2s',
+                          fontWeight: '500'
+                        }}
+                        onMouseEnter={(e) => e.target.style.background = '#b71c1c'}
+                        onMouseLeave={(e) => e.target.style.background = '#d32f2f'}
+                        title={`Delete ${course.name}`}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="settings-hint" style={{ marginTop: '4px', color: '#666', fontSize: '12px' }}>
+                  Switch between courses or delete courses you no longer need
                 </p>
               </>
             ) : (

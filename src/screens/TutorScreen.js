@@ -98,16 +98,24 @@ function TutorScreen() {
     
     if (!filePath || !currentEngine) return;
 
-    setStatus('Transcribing...');
-    setIsThinking(true);
-    eventBus.emit(EVENTS.THINKING_STARTED);
+        setStatus('Transcribing...');
+        setIsThinking(true);
+        eventBus.emit(EVENTS.TRANSCRIBE_STARTED);
+        eventBus.emit(EVENTS.THINKING_STARTED);
 
     try {
       // Transcribe audio
       const transcribeResult = await transcribe(filePath, currentSettings);
       
       if (!transcribeResult.success) {
-        throw new Error(transcribeResult.error || 'Transcription failed');
+        // Show helpful error message without throwing (allows user to continue)
+        const errorMsg = transcribeResult.error || 'Transcription failed';
+        const suggestion = transcribeResult.suggestion || '';
+        setStatus(`⚠ ${errorMsg}${suggestion ? ' - ' + suggestion : ''}`);
+        setIsThinking(false);
+        eventBus.emit(EVENTS.THINKING_ENDED);
+        // Don't throw - allow user to try again or configure settings
+        return;
       }
 
       const transcriptText = transcribeResult.transcript;
@@ -422,8 +430,8 @@ function TutorScreen() {
         aria-label="Settings"
       >
         <svg 
-          width="20" 
-          height="20" 
+          width="16" 
+          height="16" 
           viewBox="0 0 24 24" 
           fill="none" 
           stroke="currentColor" 

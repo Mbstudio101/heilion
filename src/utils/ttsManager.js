@@ -2,6 +2,9 @@
 import { eventBus, EVENTS } from './eventBus';
 import { getSettings } from './appBootstrap';
 
+// Re-export voice catalog functions
+export { listTTSProviders, listVoices, setVoiceSelection, testVoice } from './ttsVoiceCatalog';
+
 let speechSynthesis = null;
 let currentUtterance = null;
 let availableVoices = [];
@@ -90,16 +93,21 @@ export async function speak(text, personaVoiceConfig, settings = null) {
     }
     
     // Check which TTS provider to use
-    const ttsProvider = settings.ttsProvider || 'web-speech';
+    const ttsProvider = settings.ttsProvider || 'soprano_local';
     
-    // Use Soprano TTS for high-quality English (if available)
-    // Will automatically fall back to Web Speech API if Soprano fails
-    if (ttsProvider === 'soprano' && settings.ttsLanguage === 'en') {
+    // Route to appropriate provider
+    if (ttsProvider === 'soprano_local') {
+      return await speakWithSoprano(text, personaVoiceConfig, settings);
+    } else if (ttsProvider === 'kokoro_local') {
+      return await speakWithKokoro(text, personaVoiceConfig, settings);
+    } else if (ttsProvider === 'elevenlabs_cloud') {
+      return await speakWithElevenLabs(text, personaVoiceConfig, settings);
+    } else if (ttsProvider === 'openai_cloud') {
+      return await speakWithOpenAI(text, personaVoiceConfig, settings);
+    } else {
+      // Fallback to Soprano or Web Speech
       return await speakWithSoprano(text, personaVoiceConfig, settings);
     }
-    
-    // Default to Web Speech API (multilingual support)
-    return await speakWithWebSpeech(text, personaVoiceConfig, settings);
   } catch (error) {
     currentUtterance = null;
     eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
@@ -129,13 +137,25 @@ async function speakWithSoprano(text, personaVoiceConfig, settings) {
     // Emit speak start event
     eventBus.emit(EVENTS.SPEAK_START, { text, persona: personaVoiceConfig });
     
+    // Get model variant and preset from settings
+    const voiceId = settings.voiceId || 'soprano-1.1-80m';
+    const presetId = settings.presetId || 'balanced';
+    
     // Use Soprano via IPC (calls main process which communicates with sidecar)
+    // Pass voiceId (model) and presetId (temperature/top_p/repetition_penalty)
     if (window.electronAPI?.ttsSpeak) {
-      const result = await window.electronAPI.ttsSpeak(text, 'soprano');
+      const result = await window.electronAPI.ttsSpeak(text, {
+        provider: 'soprano_local',
+        voiceId,
+        presetId
+      });
       
-      // If Soprano fails, fall back to Web Speech API
+      // If Soprano fails, fall back to Web Speech API (silently in production, verbose in dev)
       if (!result.success) {
-        console.warn('Soprano TTS failed, falling back to Web Speech API:', result.error);
+        // Only log once to avoid console spam - this is expected if Soprano sidecar isn't running
+        if (process.env.NODE_ENV === 'development') {
+          console.debug('Soprano TTS not available, using Web Speech API (this is normal if Soprano sidecar is not running)');
+        }
         eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, interrupted: true });
         
         // Fall back to Web Speech API
@@ -150,12 +170,295 @@ async function speakWithSoprano(text, personaVoiceConfig, settings) {
       throw new Error('Electron API not available');
     }
   } catch (error) {
-    // If Soprano fails, fall back to Web Speech API
-    console.warn('Soprano TTS error, falling back to Web Speech API:', error.message);
+    // If Soprano fails, fall back to Web Speech API (silently - expected if sidecar isn't running)
+    if (process.env.NODE_ENV === 'development') {
+      console.debug('Soprano TTS error, using Web Speech API fallback');
+    }
     eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, interrupted: true });
     
     // Fall back to Web Speech API
     return await speakWithWebSpeech(text, personaVoiceConfig, settings);
+  }
+}
+
+// ElevenLabs TTS integration
+async function speakWithElevenLabs(text, personaVoiceConfig, settings) {
+  try {
+    // Emit speak start event
+    eventBus.emit(EVENTS.SPEAK_START, { text, persona: personaVoiceConfig });
+    
+    // Get API key
+    const keyResult = await window.electronAPI?.getApiKey('elevenlabs');
+    if (!keyResult?.success || !keyResult?.key) {
+      throw new Error('ElevenLabs API key not configured');
+    }
+    
+    // Get voice ID from settings
+    const voiceId = settings.voiceId || '21m00Tcm4TlvDq8ikWAM'; // Default: Rachel
+    
+    // Call ElevenLabs API
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': keyResult.key
+      },
+      body: JSON.stringify({
+        text: text,
+        model_id: 'eleven_monolingual_v1',
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75
+        }
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`ElevenLabs API error: ${response.statusText}`);
+    }
+    
+    // Convert response to blob and play via audio element
+    const audioBlob = await response.blob();
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio(audioUrl);
+    
+    // Setup WebAudio analyser for amplitude tracking
+    let audioContext = null;
+    let analyser = null;
+    let source = null;
+    let amplitudeInterval = null;
+    
+    try {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      source = audioContext.createMediaElementSource(audio);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      analyser.connect(audioContext.destination);
+      
+      // Emit amplitude levels during playback (~30-60 times/sec)
+      const emitAmplitude = () => {
+        if (!analyser || audio.paused || audio.ended) {
+          if (amplitudeInterval) {
+            clearInterval(amplitudeInterval);
+            amplitudeInterval = null;
+          }
+          return;
+        }
+        
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteTimeDomainData(dataArray);
+        
+        // Calculate RMS amplitude
+        let sumSquares = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const normalized = (dataArray[i] - 128) / 128;
+          sumSquares += normalized * normalized;
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        const level = Math.min(rms * 2, 1); // Normalize to 0..1
+        
+        eventBus.emit(EVENTS.SPEAK_LEVEL, { level });
+      };
+      
+      // Start amplitude tracking (~50 times/sec)
+      amplitudeInterval = setInterval(emitAmplitude, 20);
+    } catch (error) {
+      // WebAudio not available - continue without amplitude tracking
+      console.debug('WebAudio not available for amplitude tracking:', error);
+    }
+    
+    return new Promise((resolve, reject) => {
+      audio.onended = () => {
+        if (amplitudeInterval) {
+          clearInterval(amplitudeInterval);
+          amplitudeInterval = null;
+        }
+        if (audioContext && audioContext.state !== 'closed') {
+          audioContext.close().catch(() => {});
+        }
+        URL.revokeObjectURL(audioUrl);
+        eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig });
+        resolve({ success: true });
+      };
+      
+      audio.onerror = (error) => {
+        if (amplitudeInterval) {
+          clearInterval(amplitudeInterval);
+          amplitudeInterval = null;
+        }
+        if (audioContext && audioContext.state !== 'closed') {
+          audioContext.close().catch(() => {});
+        }
+        URL.revokeObjectURL(audioUrl);
+        eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
+        reject(new Error(`Audio playback error: ${error.message}`));
+      };
+      
+      audio.play().catch(reject);
+    });
+  } catch (error) {
+    eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
+    return { success: false, error: error.message };
+  }
+}
+
+// Kokoro TTS integration (Multi-language, local OpenAI-compatible API)
+async function speakWithKokoro(text, personaVoiceConfig, settings) {
+  try {
+    // Emit speak start event
+    eventBus.emit(EVENTS.SPEAK_START, { text, persona: personaVoiceConfig });
+    
+    // Get voice ID from settings (default: af_sky)
+    const voiceId = settings.voiceId || 'af_sky';
+    
+    // Use Kokoro via IPC (calls main process which communicates with sidecar)
+    if (window.electronAPI?.ttsSpeak) {
+      const result = await window.electronAPI.ttsSpeak(text, {
+        provider: 'kokoro_local',
+        voiceId
+      });
+      
+      if (result.success) {
+        eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig });
+        return { success: true };
+      } else {
+        eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: result.error });
+        return { success: false, error: result.error };
+      }
+    } else {
+      // Fallback to Web Speech API if Kokoro not available
+      console.debug('Kokoro TTS not available via IPC, falling back to Web Speech API');
+      return await speakWithWebSpeech(text, personaVoiceConfig, settings);
+    }
+  } catch (error) {
+    eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
+    return { success: false, error: error.message };
+  }
+}
+
+// OpenAI TTS integration
+async function speakWithOpenAI(text, personaVoiceConfig, settings) {
+  try {
+    // Emit speak start event
+    eventBus.emit(EVENTS.SPEAK_START, { text, persona: personaVoiceConfig });
+    
+    // Get API key
+    const keyResult = await window.electronAPI?.getApiKey('openai');
+    if (!keyResult?.success || !keyResult?.key) {
+      throw new Error('OpenAI API key not configured');
+    }
+    
+    // Get voice ID from settings (default: alloy)
+    const voiceId = settings.voiceId || 'alloy';
+    
+    // Call OpenAI TTS API
+    const response = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${keyResult.key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'tts-1',
+        input: text,
+        voice: voiceId
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`OpenAI API error: ${errorData.error?.message || response.statusText}`);
+    }
+    
+    // Convert response to blob and play via audio element
+    const audioBlob = await response.blob();
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio(audioUrl);
+    
+    // Setup WebAudio analyser for amplitude tracking
+    let audioContext = null;
+    let analyser = null;
+    let source = null;
+    let amplitudeInterval = null;
+    
+    try {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      source = audioContext.createMediaElementSource(audio);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      analyser.connect(audioContext.destination);
+      
+      // Emit amplitude levels during playback (~30-60 times/sec)
+      const emitAmplitude = () => {
+        if (!analyser || audio.paused || audio.ended) {
+          if (amplitudeInterval) {
+            clearInterval(amplitudeInterval);
+            amplitudeInterval = null;
+          }
+          return;
+        }
+        
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteTimeDomainData(dataArray);
+        
+        // Calculate RMS amplitude
+        let sumSquares = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const normalized = (dataArray[i] - 128) / 128;
+          sumSquares += normalized * normalized;
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        const level = Math.min(rms * 2, 1); // Normalize to 0..1
+        
+        eventBus.emit(EVENTS.SPEAK_LEVEL, { level });
+      };
+      
+      // Start amplitude tracking (~50 times/sec)
+      amplitudeInterval = setInterval(emitAmplitude, 20);
+    } catch (error) {
+      // WebAudio not available - continue without amplitude tracking
+      console.debug('WebAudio not available for amplitude tracking:', error);
+    }
+    
+    return new Promise((resolve, reject) => {
+      audio.onended = () => {
+        if (amplitudeInterval) {
+          clearInterval(amplitudeInterval);
+          amplitudeInterval = null;
+        }
+        if (audioContext && audioContext.state !== 'closed') {
+          audioContext.close().catch(() => {});
+        }
+        URL.revokeObjectURL(audioUrl);
+        eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig });
+        resolve({ success: true });
+      };
+      
+      audio.onerror = (error) => {
+        if (amplitudeInterval) {
+          clearInterval(amplitudeInterval);
+          amplitudeInterval = null;
+        }
+        if (audioContext && audioContext.state !== 'closed') {
+          audioContext.close().catch(() => {});
+        }
+        URL.revokeObjectURL(audioUrl);
+        eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
+        reject(new Error(`Audio playback error: ${error.message}`));
+      };
+      
+      audio.play().catch(reject);
+    });
+  } catch (error) {
+    eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
+    return { success: false, error: error.message };
   }
 }
 

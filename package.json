@@ -3,16 +3,18 @@
   "version": "1.0.0",
   "description": "AI-powered study tutor with voice interaction",
   "main": "main.js",
+  "homepage": "./",
   "scripts": {
     "dev": "concurrently \"npm run dev:react\" \"wait-on http://localhost:3000 && electron .\"",
     "dev:react": "BROWSER=none react-scripts start",
     "build": "react-scripts build",
-    "build:mac": "react-scripts build && electron-builder --mac",
+    "prebuild:mac": "cp main.js build/electron.js && cp preload.js build/preload.js && cp -r main build/main",
+    "build:mac": "react-scripts build && npm run prebuild:mac && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
-  "electronBuilder": {
+  "build": {
     "appId": "com.heilion.app",
     "productName": "Heilion",
     "directories": {
@@ -22,13 +24,21 @@
       "build/**/*",
       "main.js",
       "preload.js",
-      "src/**/*",
-      "package.json"
+      "package.json",
+      "main/**/*",
+      "!src/**/*"
     ],
     "mac": {
       "category": "public.app-category.education",
       "target": "dmg",
-      "icon": "build/icons/icon.png"
+      "icon": "build/icons/icon.icns",
+      "identity": null,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "CFBundleName": "Heilion",
+        "CFBundleDisplayName": "Heilion",
+        "CFBundleIdentifier": "com.heilion.app"
+      }
     },
     "win": {
       "icon": "build/icons/icon.png"
@@ -38,24 +48,23 @@
     }
   },
   "dependencies": {
+    "@xmldom/xmldom": "^0.8.10",
+    "axios": "^1.6.2",
+    "better-sqlite3": "^9.2.2",
+    "jszip": "^3.10.1",
+    "keytar": "^7.9.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0",
-    "better-sqlite3": "^9.2.2",
-    "keytar": "^7.9.0",
-    "ws": "^8.16.0",
-    "axios": "^1.6.2",
-    "jszip": "^3.10.1",
-    "@xmldom/xmldom": "^0.8.10"
+    "ws": "^8.16.0"
   },
   "devDependencies": {
-    "react-scripts": "5.0.1",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "concurrently": "^8.2.2",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
-    "concurrently": "^8.2.2",
-    "wait-on": "^7.2.0",
-    "@types/react": "^18.2.43",
-    "@types/react-dom": "^18.2.17"
+    "react-scripts": "5.0.1",
+    "wait-on": "^7.2.0"
   },
   "browserslist": {
     "production": [

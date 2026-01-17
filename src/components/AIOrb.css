@@ -7,11 +7,22 @@
   justify-content: center;
 }
 
+.ai-orb-canvas {
+  width: 300px;
+  height: 300px;
+  display: block;
+  background: transparent;
+  /* Smooth rendering for fluid orb - NO crisp/pixelated */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: auto;
+}
+
+/* Legacy CSS for backward compatibility (kept but not actively used) */
 .ai-orb {
   width: 200px;
   height: 200px;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, rgba(100, 150, 255, 0.9), rgba(50, 100, 200, 0.7));
+  background: radial-gradient(circle at 30% 30%, rgba(254, 254, 255, 0.9), rgba(50, 100, 200, 0.7));
   box-shadow: 0 0 60px rgba(244, 244, 244, 0.6), 
               0 0 100px rgba(235, 242, 255, 0.3),
               inset 0 0 60px rgba(150, 200, 255, 0.3);
@@ -26,7 +37,7 @@
   width: 300px;
   height: 300px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(100, 150, 255, 0.3), transparent 70%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.3), transparent 70%);
   animation: glow 3s ease-in-out infinite;
   z-index: 1;
   filter: blur(20px);

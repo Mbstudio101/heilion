@@ -35,6 +35,9 @@ export async function beginActiveCapture(mode = 'auto') {
     analyser.fftSize = 256;
     analyser.smoothingTimeConstant = 0.8;
     source.connect(analyser);
+    
+    // Expose analyser for orb amplitude monitoring
+    window.__micAnalyser = analyser;
 
     // Setup MediaRecorder
     const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
@@ -69,6 +72,7 @@ export async function beginActiveCapture(mode = 'auto') {
     lastSoundTime = Date.now();
     
     eventBus.emit(EVENTS.CAPTURE_STARTED, { mode });
+    eventBus.emit(EVENTS.ORB_STATE, { state: 'listening' });
 
     // ALWAYS use auto-stop on silence (for wake, auto, and push-to-talk modes)
     // This makes the experience hands-free - user just talks and stops
@@ -84,22 +88,28 @@ export async function beginActiveCapture(mode = 'auto') {
 function startSilenceDetection() {
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Uint8Array(bufferLength);
+  const timeDataArray = new Uint8Array(bufferLength);
 
   const checkSilence = () => {
     if (!isRecording || !analyser) return;
 
     analyser.getByteFrequencyData(dataArray);
+    analyser.getByteTimeDomainData(timeDataArray);
     
     // Calculate average volume across frequency bins
     const average = dataArray.reduce((a, b) => a + b) / bufferLength;
     const volume = average / 255;
 
-    // Also check RMS (root mean square) for better speech detection
+    // Calculate RMS (root mean square) from time domain data for better speech detection
     let sumSquares = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      sumSquares += (dataArray[i] / 255) * (dataArray[i] / 255);
+    for (let i = 0; i < timeDataArray.length; i++) {
+      const normalized = (timeDataArray[i] - 128) / 128;
+      sumSquares += normalized * normalized;
     }
-    const rms = Math.sqrt(sumSquares / dataArray.length);
+    const rms = Math.sqrt(sumSquares / timeDataArray.length);
+
+    // Emit LISTEN_LEVEL event for orb reactivity (30-60 times/sec)
+    eventBus.emit(EVENTS.LISTEN_LEVEL, { level: Math.min(rms * 2, 1) });
 
     // User is speaking if volume OR RMS is above threshold
     const isSpeaking = volume > silenceThreshold || rms > silenceThreshold;
@@ -167,6 +177,9 @@ function cleanup() {
   analyser = null;
   mediaRecorder = null;
   audioChunks = [];
+  
+  // Clear exposed analyser
+  window.__micAnalyser = null;
 }
 
 async function saveAudioBlob(blob) {

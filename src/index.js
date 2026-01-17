@@ -9,3 +9,11 @@ root.render(
     <App />
   </React.StrictMode>
 );
+
+// Hide splash screen once React is mounted
+if (window.hideSplashScreen) {
+  // Small delay to ensure React has rendered
+  setTimeout(() => {
+    window.hideSplashScreen();
+  }, 100);
+}
