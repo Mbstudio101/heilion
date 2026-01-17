@@ -1,0 +1,109 @@
+.ai-orb-container {
+  position: relative;
+  width: 300px;
+  height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai-orb {
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(100, 150, 255, 0.9), rgba(50, 100, 200, 0.7));
+  box-shadow: 0 0 60px rgba(244, 244, 244, 0.6), 
+              0 0 100px rgba(235, 242, 255, 0.3),
+              inset 0 0 60px rgba(150, 200, 255, 0.3);
+  animation: pulse 3s ease-in-out infinite;
+  position: relative;
+  z-index: 2;
+  transition: all 0.3s ease;
+}
+
+.ai-orb-glow {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(100, 150, 255, 0.3), transparent 70%);
+  animation: glow 3s ease-in-out infinite;
+  z-index: 1;
+  filter: blur(20px);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.5;
+  }
+}
+
+.ai-orb.listening {
+  background: radial-gradient(circle at 30% 30%, rgba(100, 255, 100, 0.9), rgba(50, 200, 50, 0.7));
+  box-shadow: 0 0 80px rgba(100, 255, 100, 0.8),
+              0 0 120px rgba(100, 255, 100, 0.4),
+              inset 0 0 60px rgba(150, 255, 150, 0.4);
+  animation: pulse 1.5s ease-in-out infinite, reactToSound 0.5s ease-in-out infinite alternate;
+}
+
+.ai-orb.thinking {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 200, 100, 0.9), rgba(255, 150, 50, 0.7));
+  box-shadow: 0 0 80px rgba(255, 200, 100, 0.8),
+              0 0 120px rgba(255, 200, 100, 0.4),
+              inset 0 0 60px rgba(255, 220, 150, 0.4);
+  animation: swirl 2s linear infinite, pulse 1s ease-in-out infinite;
+}
+
+.ai-orb.speaking {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 150, 200, 0.9), rgba(255, 100, 150, 0.7));
+  box-shadow: 0 0 80px rgba(255, 150, 200, 0.8),
+              0 0 120px rgba(255, 150, 200, 0.4),
+              inset 0 0 60px rgba(255, 180, 220, 0.4);
+  animation: pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes swirl {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes reactToSound {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(1.1);
+  }
+}
+
+.ai-orb-glow.listening {
+  background: radial-gradient(circle, rgba(100, 255, 100, 0.3), transparent);
+}
+
+.ai-orb-glow.thinking {
+  background: radial-gradient(circle, rgba(255, 200, 100, 0.3), transparent);
+}
+
+.ai-orb-glow.speaking {
+  background: radial-gradient(circle, rgba(255, 150, 200, 0.3), transparent);
+}

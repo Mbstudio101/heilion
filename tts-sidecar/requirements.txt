@@ -1,0 +1,3 @@
+soprano-tts
+uvicorn
+requests

@@ -1,0 +1,181 @@
+/* Voice Mode Screen - Single-screen immersive UI */
+.voice-mode-screen {
+  width: 100vw;
+  height: 100vh;
+  background: #000000;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.voice-mode-screen.drag-over {
+  background: #111;
+}
+
+.drag-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 100, 255, 0.1);
+  border: 2px dashed #0066ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  pointer-events: none;
+}
+
+.drag-message {
+  background: rgba(0, 0, 0, 0.9);
+  color: #fff;
+  padding: 24px 48px;
+  border-radius: 12px;
+  font-size: 18px;
+  border: 1px solid #0066ff;
+}
+
+.gear-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(26, 26, 26, 0.8);
+  color: #aaaaaa;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0;
+  cursor: pointer;
+  z-index: 10;
+  padding: 0;
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  outline: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.gear-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: rotate(45deg);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.gear-btn:active {
+  transform: rotate(45deg) scale(0.95);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.gear-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  transition: all 0.2s ease;
+}
+
+.voice-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  z-index: 1;
+}
+
+.status-text {
+  font-size: 18px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-weight: 300;
+}
+
+.persona-badge {
+  background: rgba(100, 150, 255, 0.2);
+  color: #9bb5ff;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border: 1px solid rgba(100, 150, 255, 0.3);
+}
+
+.transcript-bar {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(17, 17, 17, 0.95);
+  padding: 12px 20px;
+  border-radius: 8px;
+  max-width: 80%;
+  font-size: 14px;
+  color: #aaa;
+  border: 1px solid #333;
+  z-index: 2;
+  text-align: center;
+  backdrop-filter: blur(10px);
+}
+
+.wake-word-banner {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 165, 0, 0.1);
+  color: #ffa500;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  border: 1px solid rgba(255, 165, 0, 0.3);
+  z-index: 2;
+}
+
+.empty-state {
+  position: absolute;
+  bottom: 150px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #666;
+  font-size: 14px;
+  text-align: center;
+  z-index: 1;
+}
+
+.manual-record-btn {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0066ff;
+  color: #fff;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.2s;
+  z-index: 2;
+}
+
+.manual-record-btn:hover:not(:disabled) {
+  background: #0052cc;
+}
+
+.manual-record-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

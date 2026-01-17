@@ -1,0 +1,128 @@
+.title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #2a2a2a;
+  -webkit-app-region: drag;
+  user-select: none;
+  z-index: 10000;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.title-bar-drag-region {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  -webkit-app-region: drag;
+}
+
+.title-bar-title {
+  font-size: 13px;
+  color: #888;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.title-bar-controls {
+  display: flex;
+  -webkit-app-region: no-drag;
+}
+
+.title-bar-button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: #ccc;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s, color 0.15s;
+  padding: 0;
+  line-height: 1;
+}
+
+.title-bar-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.title-bar-button.close:hover {
+  background: #e81123;
+  color: white;
+}
+
+.title-bar-button span {
+  display: block;
+  font-size: 18px;
+  font-weight: 300;
+}
+
+.title-bar-button.minimize span {
+  font-size: 20px;
+  margin-bottom: 2px;
+}
+
+.title-bar-button.maximize span {
+  font-size: 14px;
+}
+
+.title-bar-button.close span {
+  font-size: 20px;
+  font-weight: 400;
+}
+
+/* macOS specific styling */
+.title-bar[data-platform="darwin"] {
+  padding-left: 78px; /* Space for traffic lights */
+}
+
+.title-bar[data-platform="darwin"] .title-bar-controls {
+  position: absolute;
+  left: 12px;
+  top: 0;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 8px;
+  margin-top: 8px;
+  font-size: 0;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button.close {
+  background: #ff5f57;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button.close:hover {
+  background: #ff5f57;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button.minimize {
+  background: #ffbd2e;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button.minimize:hover {
+  background: #ffbd2e;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button.maximize {
+  background: #28ca42;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button.maximize:hover {
+  background: #28ca42;
+}
+
+.title-bar[data-platform="darwin"] .title-bar-button span {
+  display: none;
+}

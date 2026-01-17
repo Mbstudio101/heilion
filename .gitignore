@@ -1,0 +1,16 @@
+node_modules/
+build/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+electron-builder.env
+.cache/
+
+# Python sidecars
+tts-sidecar/soprano-repo/
+wake-word-sidecar/__pycache__/
+tts-sidecar/__pycache__/
+*.pyc
+__pycache__/

@@ -1,0 +1,257 @@
+// Deck import and management functions
+import { parsePPTX, parsePPTXFromBuffer } from './pptxParser';
+
+export async function importDeckFromPPTX(filePath) {
+  try {
+    // Import PPTX via Electron dialog
+    const result = await window.electronAPI.importPPTX();
+    if (!result.success || !result.filePath) {
+      return { success: false, error: 'File selection cancelled' };
+    }
+
+    const filePath = result.filePath;
+    
+    // Parse PPTX (will use parsePPTXFromBuffer if fileData is provided)
+    const parseResult = result.fileData 
+      ? await parsePPTXFromBuffer(result.fileData)
+      : await parsePPTX(filePath);
+    
+    if (!parseResult.success) {
+      return { success: false, error: parseResult.error };
+    }
+
+    // Extract filename
+    const fileName = filePath.split('/').pop().replace('.pptx', '') || 'Imported Deck';
+
+    // Create deck in DB
+    const deckResult = await window.electronAPI.dbQuery(
+      'INSERT INTO decks (name, file_path) VALUES (?, ?)',
+      [fileName, filePath]
+    );
+
+    if (!deckResult.success) {
+      return { success: false, error: 'Failed to save deck' };
+    }
+
+    const deckId = deckResult.data.lastInsertRowid;
+
+    // Save slides
+    for (const slide of parseResult.slides) {
+      await window.electronAPI.dbQuery(
+        'INSERT INTO slides (deck_id, slide_number, title, content, notes) VALUES (?, ?, ?, ?, ?)',
+        [deckId, slide.slideNumber, slide.title, slide.content, slide.notes]
+      );
+    }
+
+    // Build study pack and generate questions
+    await buildStudyPack(deckId);
+    await generateQuestionBank(deckId, 30);
+
+    return { success: true, deckId };
+  } catch (error) {
+    console.error('Import deck failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function buildStudyPack(deckId) {
+  try {
+    // Get all slides for the deck
+    const slidesResult = await window.electronAPI.dbQuery(
+      'SELECT * FROM slides WHERE deck_id = ? ORDER BY slide_number',
+      [deckId]
+    );
+
+    if (!slidesResult.success || !slidesResult.data.length) {
+      return { success: false, error: 'No slides found' };
+    }
+
+    const slides = slidesResult.data;
+
+    // Extract outline (titles)
+    const outline = slides.map(s => s.title).filter(Boolean).join('\n');
+
+    // Extract key terms (simple word extraction - in production, use NLP)
+    const allText = slides.map(s => `${s.content} ${s.notes}`).join(' ');
+    const words = allText.toLowerCase().match(/\b[a-z]{4,}\b/g) || [];
+    const wordFreq = {};
+    words.forEach(word => {
+      wordFreq[word] = (wordFreq[word] || 0) + 1;
+    });
+    const keyTerms = Object.entries(wordFreq)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 50)
+      .map(([term]) => term);
+
+    // Extract concepts (grouped by slide)
+    const concepts = slides.map(slide => ({
+      slideId: slide.id,
+      concept: slide.title || `Slide ${slide.slide_number}`,
+      description: slide.content.substring(0, 200)
+    }));
+
+    // Store in mastery table for tracking
+    for (const concept of concepts) {
+      await window.electronAPI.dbQuery(
+        `INSERT OR IGNORE INTO mastery (deck_id, slide_id, concept, mastery_level, last_practiced)
+         VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+        [deckId, concept.slideId, concept.concept]
+      );
+    }
+
+    return { success: true, outline, keyTerms, concepts };
+  } catch (error) {
+    console.error('Build study pack failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function generateQuestionBank(deckId, count = 30) {
+  try {
+    // Get slides
+    const slidesResult = await window.electronAPI.dbQuery(
+      'SELECT * FROM slides WHERE deck_id = ? ORDER BY slide_number',
+      [deckId]
+    );
+
+    if (!slidesResult.success) {
+      return { success: false, error: 'Failed to load slides' };
+    }
+
+    const slides = slidesResult.data;
+    const questions = [];
+
+    // Generate questions - at least 2-3 per slide until we reach count
+    let questionIndex = 0;
+    while (questions.length < count && questionIndex < slides.length * 3) {
+      const slideIndex = Math.floor(questionIndex / 3);
+      const slide = slides[slideIndex % slides.length];
+
+      const qType = questionIndex % 3;
+
+      let questionText, idealAnswer, difficulty;
+
+      if (qType === 0) {
+        // Definition/comprehension
+        questionText = `What is ${slide.title || 'the main concept'}?`;
+        idealAnswer = slide.content.substring(0, 300);
+        difficulty = 'easy';
+      } else if (qType === 1) {
+        // Explanation
+        questionText = `Explain the key points about "${slide.title || `Slide ${slide.slide_number}`}"`;
+        idealAnswer = slide.content || slide.notes;
+        difficulty = 'medium';
+      } else {
+        // Application
+        questionText = `How would you apply the concepts from "${slide.title || `Slide ${slide.slide_number}`}"?`;
+        idealAnswer = slide.notes || slide.content.substring(0, 300);
+        difficulty = 'hard';
+      }
+
+      if (questionText && idealAnswer && idealAnswer.length > 50) {
+        questions.push({
+          deckId,
+          slideId: slide.id,
+          questionText,
+          idealAnswer,
+          difficulty,
+          keyPoints: extractKeyPoints(idealAnswer),
+          slideRefs: [slide.slide_number]
+        });
+      }
+
+      questionIndex++;
+    }
+
+    // Save questions to DB
+    const slideMap = new Map();
+    const savedSlides = await window.electronAPI.dbQuery(
+      'SELECT id, slide_number FROM slides WHERE deck_id = ?',
+      [deckId]
+    );
+
+    if (savedSlides.success) {
+      savedSlides.data.forEach(slide => {
+        slideMap.set(slide.slide_number, slide.id);
+      });
+    }
+
+    for (const q of questions) {
+      await window.electronAPI.dbQuery(
+        'INSERT INTO questions (deck_id, slide_id, question_text, correct_answer) VALUES (?, ?, ?, ?)',
+        [q.deckId, q.slideId || null, q.questionText, q.idealAnswer]
+      );
+    }
+
+    return { success: true, questions, count: questions.length };
+  } catch (error) {
+    console.error('Generate question bank failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+function extractKeyPoints(text) {
+  // Simple extraction - split by sentences, take first few
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 20);
+  return sentences.slice(0, 5).map(s => s.trim());
+}
+
+export async function getDeckLibrary() {
+  try {
+    const result = await window.electronAPI.dbQuery(
+      'SELECT * FROM decks ORDER BY created_at DESC'
+    );
+    return { success: true, decks: result.data || [] };
+  } catch (error) {
+    return { success: false, error: error.message, decks: [] };
+  }
+}
+
+export async function getDeck(deckId) {
+  try {
+    const deckResult = await window.electronAPI.dbQuery(
+      'SELECT * FROM decks WHERE id = ?',
+      [deckId]
+    );
+
+    if (!deckResult.success || !deckResult.data.length) {
+      return { success: false, error: 'Deck not found' };
+    }
+
+    const deck = deckResult.data[0];
+
+    // Get slides
+    const slidesResult = await window.electronAPI.dbQuery(
+      'SELECT * FROM slides WHERE deck_id = ? ORDER BY slide_number',
+      [deckId]
+    );
+
+    // Get questions
+    const questionsResult = await window.electronAPI.dbQuery(
+      'SELECT * FROM questions WHERE deck_id = ?',
+      [deckId]
+    );
+
+    return {
+      success: true,
+      deck,
+      slides: slidesResult.data || [],
+      questions: questionsResult.data || []
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function deleteDeck(deckId) {
+  try {
+    // Delete deck (cascades to slides and questions)
+    const result = await window.electronAPI.dbQuery(
+      'DELETE FROM decks WHERE id = ?',
+      [deckId]
+    );
+    return { success: result.success };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}

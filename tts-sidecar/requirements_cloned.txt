@@ -1,0 +1,14 @@
+# Requirements for running Soprano TTS from cloned repository
+# Install with: pip install -r requirements_cloned.txt
+# OR: cd soprano-repo && pip install -e .
+
+# Base dependencies (will be installed when installing soprano-repo)
+uvicorn
+requests
+
+# Note: Soprano TTS dependencies (PyTorch, etc.) will be installed
+# when you run: cd soprano-repo && pip install -e .
+# 
+# Or install directly from cloned repo:
+# cd tts-sidecar/soprano-repo
+# python3.10 -m pip install -e .
