@@ -8,8 +8,10 @@
     "dev": "concurrently \"npm run dev:react\" \"wait-on http://localhost:3000 && electron .\"",
     "dev:react": "BROWSER=none react-scripts start",
     "build": "react-scripts build",
-    "prebuild:mac": "cp main.js build/electron.js && cp preload.js build/preload.js && cp -r main build/main",
-    "build:mac": "react-scripts build && npm run prebuild:mac && electron-builder --mac",
+    "prebuild:mac": "cp main.js build/electron.js && cp preload.js build/preload.js && cp -r main build/main && mkdir -p build/icons",
+    "create-icon": "bash scripts/create-icon.sh",
+    "clean": "bash scripts/clean.sh",
+    "build:mac": "react-scripts build && npm run prebuild:mac && npm run create-icon && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps",
     "test": "react-scripts test",
     "eject": "react-scripts eject"

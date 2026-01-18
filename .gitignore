@@ -7,10 +7,36 @@ dist/
 .env.local
 electron-builder.env
 .cache/
+.eslintcache
 
 # Python sidecars
 tts-sidecar/soprano-repo/
 wake-word-sidecar/__pycache__/
 tts-sidecar/__pycache__/
 *.pyc
+*.pyo
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.nyc_output/
+coverage/
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# Build artifacts (temporary)
+build/icons/icon.iconset/
+build/icons/*.iconset/
+
+# Temporary files
+Thumbs.db
+*.tmp

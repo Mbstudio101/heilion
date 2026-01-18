@@ -32,7 +32,13 @@ AI-powered study tutor with voice interaction for macOS. Import PowerPoint prese
    ollama pull llama2
    ```
 
-2. **whisper.cpp** - Local Speech-to-Text
+2. **ffmpeg** - Audio conversion for Whisper.cpp
+   ```bash
+   # Install ffmpeg (required for audio conversion)
+   brew install ffmpeg
+   ```
+
+3. **whisper.cpp** - Local Speech-to-Text
    ```bash
    # Install whisper.cpp
    git clone https://github.com/ggerganov/whisper.cpp.git
@@ -43,7 +49,7 @@ AI-powered study tutor with voice interaction for macOS. Import PowerPoint prese
    export PATH="$PATH:$(pwd)"
    ```
 
-3. **Wake Word Service** - Hands-free activation
+4. **Wake Word Service** - Hands-free activation
    ```bash
    # Navigate to wake-word-sidecar directory
    cd wake-word-sidecar
