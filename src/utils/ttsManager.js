@@ -8,6 +8,7 @@ export { listTTSProviders, listVoices, setVoiceSelection, testVoice } from './tt
 let speechSynthesis = null;
 let currentUtterance = null;
 let availableVoices = [];
+let currentAudioElement = null; // Track active audio element for barge-in
 
 // Initialize Web Speech API and load voices
 function initSpeechSynthesis() {
@@ -116,18 +117,34 @@ export async function speak(text, personaVoiceConfig, settings = null) {
 }
 
 export async function stopSpeaking() {
+  let stopped = false;
+  
+  // Stop Web Speech API
   if (speechSynthesis && currentUtterance) {
-    // Cancel speech - this will trigger onerror with 'interrupted', which is expected
     speechSynthesis.cancel();
     const wasSpeaking = currentUtterance !== null;
     currentUtterance = null;
-    
-    // Only emit event if we actually cancelled something
-    if (wasSpeaking) {
-      eventBus.emit(EVENTS.SPEAK_END, { stopped: true, interrupted: true });
+    stopped = wasSpeaking;
+  }
+  
+  // Stop audio element (ElevenLabs, OpenAI, etc.)
+  if (currentAudioElement) {
+    try {
+      currentAudioElement.pause();
+      currentAudioElement.currentTime = 0;
+      currentAudioElement = null;
+      stopped = true;
+    } catch (error) {
+      console.error('Error stopping audio element:', error);
     }
+  }
+  
+  // Emit event if we stopped something
+  if (stopped) {
+    eventBus.emit(EVENTS.SPEAK_END, { stopped: true, interrupted: true });
     return { success: true };
   }
+  
   return { success: false, error: 'No speech in progress' };
 }
 
@@ -222,6 +239,7 @@ async function speakWithElevenLabs(text, personaVoiceConfig, settings) {
     const audioBlob = await response.blob();
     const audioUrl = URL.createObjectURL(audioBlob);
     const audio = new Audio(audioUrl);
+    currentAudioElement = audio; // Track for barge-in
     
     // Setup WebAudio analyser for amplitude tracking
     let audioContext = null;
@@ -281,6 +299,9 @@ async function speakWithElevenLabs(text, personaVoiceConfig, settings) {
           audioContext.close().catch(() => {});
         }
         URL.revokeObjectURL(audioUrl);
+        if (currentAudioElement === audio) {
+          currentAudioElement = null; // Clear reference
+        }
         eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig });
         resolve({ success: true });
       };
@@ -294,6 +315,9 @@ async function speakWithElevenLabs(text, personaVoiceConfig, settings) {
           audioContext.close().catch(() => {});
         }
         URL.revokeObjectURL(audioUrl);
+        if (currentAudioElement === audio) {
+          currentAudioElement = null; // Clear reference
+        }
         eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
         reject(new Error(`Audio playback error: ${error.message}`));
       };
@@ -378,6 +402,7 @@ async function speakWithOpenAI(text, personaVoiceConfig, settings) {
     const audioBlob = await response.blob();
     const audioUrl = URL.createObjectURL(audioBlob);
     const audio = new Audio(audioUrl);
+    currentAudioElement = audio; // Track for barge-in
     
     // Setup WebAudio analyser for amplitude tracking
     let audioContext = null;
@@ -437,6 +462,9 @@ async function speakWithOpenAI(text, personaVoiceConfig, settings) {
           audioContext.close().catch(() => {});
         }
         URL.revokeObjectURL(audioUrl);
+        if (currentAudioElement === audio) {
+          currentAudioElement = null; // Clear reference
+        }
         eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig });
         resolve({ success: true });
       };
@@ -450,6 +478,9 @@ async function speakWithOpenAI(text, personaVoiceConfig, settings) {
           audioContext.close().catch(() => {});
         }
         URL.revokeObjectURL(audioUrl);
+        if (currentAudioElement === audio) {
+          currentAudioElement = null; // Clear reference
+        }
         eventBus.emit(EVENTS.SPEAK_END, { text, persona: personaVoiceConfig, error: error.message });
         reject(new Error(`Audio playback error: ${error.message}`));
       };

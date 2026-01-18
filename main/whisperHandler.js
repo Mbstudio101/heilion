@@ -55,13 +55,23 @@ async function checkWhisperAvailable() {
   return { available: !!foundPath, path: foundPath };
 }
 
-async function findModelPath() {
+async function findModelPath(modelName = null) {
+  // If model name is specified, try to find it first
+  const preferredModelName = modelName || 'base.en';
+  
+  // Build model filename from settings (e.g., 'base.en' -> 'ggml-base.en.bin')
+  const preferredFileName = `ggml-${preferredModelName}.bin`;
+  
   // Try to find model files in common locations
+  // Prioritize specified model, then normal models (base.en, small.en)
+  // NEVER use test models - they are empty (no tensors loaded)
   const modelNames = [
-    'ggml-base.en.bin', // Standard name
-    'for-tests-ggml-base.en.bin', // Test model name
-    'ggml-tiny.en.bin', // Smaller alternative
-    'for-tests-ggml-tiny.en.bin' // Test tiny model
+    preferredFileName, // User-specified model first
+    'ggml-base.en.bin', // Standard base model (preferred default)
+    'ggml-small.en.bin', // Small model (alternative)
+    'ggml-tiny.en.bin', // Tiny model (fallback)
+    'ggml-medium.en.bin' // Medium model (if available)
+    // Test models REMOVED - they are empty and don't work
   ];
 
   const modelDirs = [
@@ -84,7 +94,7 @@ async function findModelPath() {
   return null;
 }
 
-async function runWhisperTranscription(audioPath) {
+async function runWhisperTranscription(audioPath, modelName = null) {
   try {
     // Check if audio file exists
     if (!fs.existsSync(audioPath)) {
@@ -102,8 +112,8 @@ async function runWhisperTranscription(audioPath) {
       };
     }
 
-    // Find model file
-    const modelPath = await findModelPath();
+    // Find model file (use modelName from settings if provided)
+    const modelPath = await findModelPath(modelName);
     
     if (!modelPath) {
       return {

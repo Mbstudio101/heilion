@@ -38,11 +38,13 @@ RATE = 16000
 
 class WakeWordService:
     def __init__(self):
+        global OWW_AVAILABLE
         self.clients = set()
         self.model = None
         self.audio = None
         self.stream = None
         self.running = False
+        self.oww_available = OWW_AVAILABLE  # Store as instance variable
         
         if OWW_AVAILABLE:
             try:
@@ -54,6 +56,7 @@ class WakeWordService:
             except Exception as e:
                 print(f"Failed to load wake word model: {e}")
                 OWW_AVAILABLE = False
+                self.oww_available = False
     
     async def register_client(self, websocket):
         self.clients.add(websocket)
@@ -76,7 +79,7 @@ class WakeWordService:
     
     def detect_wake_word(self, audio_data):
         """Detect wake word in audio chunk"""
-        if not self.model or not OWW_AVAILABLE:
+        if not self.model or not self.oww_available:
             return None
         
         try:
@@ -101,7 +104,7 @@ class WakeWordService:
     
     def start_audio_listening(self):
         """Start listening to microphone"""
-        if not OWW_AVAILABLE:
+        if not self.oww_available:
             print("openWakeWord not available, cannot start audio listening")
             return
         
@@ -184,7 +187,7 @@ async def main():
         print("Wake word service started on ws://localhost:8765")
         
         # Start audio listening if available
-        if OWW_AVAILABLE:
+        if service.oww_available:
             service.start_audio_listening()
             audio_task = asyncio.create_task(service.audio_loop())
         

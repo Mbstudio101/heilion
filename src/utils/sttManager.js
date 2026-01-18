@@ -68,8 +68,11 @@ export async function transcribe(audioFilePath, settings) {
 
 export async function localWhisperTranscribe(audioFilePath, settings) {
   try {
-    // Call whisper.cpp via Electron main process
-    const result = await window.electronAPI.runWhisper(audioFilePath);
+    // Get model name from settings (default: base.en)
+    const modelName = settings?.whisperModel || 'base.en';
+    
+    // Call whisper.cpp via Electron main process (pass model name)
+    const result = await window.electronAPI.runWhisper(audioFilePath, modelName);
     
     if (result.success) {
       return { success: true, transcript: result.transcript };

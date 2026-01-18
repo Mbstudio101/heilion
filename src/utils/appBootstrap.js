@@ -20,17 +20,23 @@ export async function healthCheckAll() {
   const checks = await Promise.all([
     checkOllama(),
     checkWhisper(),
+    checkFFmpeg(),
     checkWakeService(),
     checkCloudKeys(),
     checkInternet()
   ]);
   
+  // Get detailed ffmpeg status (includes path)
+  const ffmpegStatus = await getFFmpegStatus();
+  
   return {
     ollamaRunning: checks[0],
     whisperReady: checks[1],
-    wakeServiceReady: checks[2],
-    cloudKeysPresent: checks[3],
-    internetAvailable: checks[4]
+    ffmpegReady: checks[2],
+    ffmpegPath: ffmpegStatus.path,
+    wakeServiceReady: checks[3],
+    cloudKeysPresent: checks[4],
+    internetAvailable: checks[5]
   };
 }
 
@@ -92,6 +98,24 @@ async function checkWhisper() {
     return result.available;
   } catch {
     return false;
+  }
+}
+
+async function checkFFmpeg() {
+  try {
+    const result = await window.electronAPI.checkFFmpeg();
+    return result.available;
+  } catch {
+    return false;
+  }
+}
+
+async function getFFmpegStatus() {
+  try {
+    const result = await window.electronAPI.checkFFmpeg();
+    return result;
+  } catch {
+    return { available: false, path: null };
   }
 }
 
@@ -207,6 +231,8 @@ function getDefaultSettings() {
     providerPreset: 'offline',
     sttProvider: 'local',
     llmProvider: 'local',
+    silenceDuration: 1000, // Auto-stop silence timeout in ms (0.9-1.2s range, default 1.0s)
+    whisperModel: 'base.en', // Whisper model: tiny.en, base.en, small.en
     ttsProvider: 'soprano_local', // 'soprano_local' | 'elevenlabs_cloud' | 'openai_cloud'
     sttFallback: false,
     llmFallback: false,

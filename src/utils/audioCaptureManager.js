@@ -9,7 +9,17 @@ let isRecording = false;
 let audioContext = null;
 let analyser = null;
 let silenceThreshold = 0.015; // Volume threshold for silence (slightly higher to avoid ambient noise)
-let silenceDuration = 2500; // 2.5 seconds of silence before auto-stop
+// Get silence duration from settings (default 1000ms = 1.0s, configurable 0.9-1.2s)
+function getSilenceDuration() {
+  try {
+    const settings = JSON.parse(localStorage.getItem('heilion-settings') || '{}');
+    const duration = settings.silenceDuration || 1000; // Default 1.0s
+    // Clamp to 0.9-1.2s range
+    return Math.max(900, Math.min(1200, duration));
+  } catch {
+    return 1000; // Default 1.0s
+  }
+}
 let lastSoundTime = Date.now();
 let recordingStartTime = Date.now();
 const minimumRecordingDuration = 1000; // Minimum 1 second of recording before auto-stop
@@ -39,12 +49,23 @@ export async function beginActiveCapture(mode = 'auto') {
     // Expose analyser for orb amplitude monitoring
     window.__micAnalyser = analyser;
 
-    // Setup MediaRecorder
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
-      ? 'audio/webm' 
-      : MediaRecorder.isTypeSupported('audio/mp4')
-      ? 'audio/mp4'
-      : 'audio/wav';
+    // Setup MediaRecorder - select best supported format at runtime
+    // Prefer opus/webm (best quality/size), fallback to mp4, then wav
+    let mimeType = 'audio/wav'; // Default fallback
+    const mimeTypes = [
+      'audio/webm;codecs=opus', // Best: Opus codec in WebM
+      'audio/webm',              // Good: WebM container
+      'audio/ogg;codecs=opus',   // Alternative: Opus in OGG
+      'audio/mp4',               // Fallback: MP4
+      'audio/wav'                // Last resort: WAV
+    ];
+    
+    for (const candidate of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(candidate)) {
+        mimeType = candidate;
+        break;
+      }
+    }
     
     mediaRecorder = new MediaRecorder(audioStream, { mimeType });
     audioChunks = [];
@@ -58,12 +79,14 @@ export async function beginActiveCapture(mode = 'auto') {
     mediaRecorder.onstop = async () => {
       const blob = new Blob(audioChunks, { type: mimeType });
       
-      // Save to temp file (in production, send blob to main process)
+      // Cleanup audio resources now (before saving)
+      cleanup();
+      
+      // Save raw blob (WebM/MP4) - main process will convert to WAV using ffmpeg
+      // DO NOT convert to WAV in JavaScript (creates invalid files)
       const filePath = await saveAudioBlob(blob);
       
       eventBus.emit(EVENTS.CAPTURE_STOPPED, { filePath });
-      
-      cleanup();
     };
 
     // Start recording
@@ -107,12 +130,20 @@ function startSilenceDetection() {
       sumSquares += normalized * normalized;
     }
     const rms = Math.sqrt(sumSquares / timeDataArray.length);
+    const normalizedLevel = Math.min(rms * 2, 1);
 
     // Emit LISTEN_LEVEL event for orb reactivity (30-60 times/sec)
-    eventBus.emit(EVENTS.LISTEN_LEVEL, { level: Math.min(rms * 2, 1) });
+    eventBus.emit(EVENTS.LISTEN_LEVEL, { level: normalizedLevel });
 
     // User is speaking if volume OR RMS is above threshold
     const isSpeaking = volume > silenceThreshold || rms > silenceThreshold;
+    
+    // BARGE-IN: If user starts speaking while TTS is playing, stop TTS and continue capture
+    // Check if TTS is playing (speaking state) and user just started speaking
+    if (isSpeaking && !isRecording) {
+      // User started speaking - check if TTS is active via event bus
+      // This will be handled in TutorScreen.js via LISTEN_LEVEL events
+    }
 
     if (isSpeaking) {
       lastSoundTime = Date.now();
@@ -121,8 +152,9 @@ function startSilenceDetection() {
       const recordingDuration = Date.now() - recordingStartTime;
       
       // Only auto-stop if:
-      // 1. Silence duration exceeded threshold
+      // 1. Silence duration exceeded threshold (configurable from settings)
       // 2. Minimum recording duration has passed (to avoid stopping immediately)
+      const silenceDuration = getSilenceDuration();
       if (silenceTime > silenceDuration && recordingDuration > minimumRecordingDuration) {
         // Auto-stop on silence
         cancelActiveCapture();
@@ -182,16 +214,23 @@ function cleanup() {
   window.__micAnalyser = null;
 }
 
+// Save raw audio blob (WebM/MP4/Opus) - main process will convert to WAV using ffmpeg
 async function saveAudioBlob(blob) {
   try {
+    // Get blob type to determine extension
+    const blobType = blob.type || 'audio/webm';
+    const extension = blobType.includes('webm') ? 'webm' : 
+                     blobType.includes('mp4') ? 'mp4' : 
+                     blobType.includes('ogg') ? 'ogg' : 'webm';
+    
     // Convert blob to ArrayBuffer for IPC transfer
     const arrayBuffer = await blob.arrayBuffer();
     
-    // Send to main process to save to file
-    const result = await window.electronAPI.saveAudioBlob(arrayBuffer);
+    // Send to main process to save raw blob (main will convert to WAV with ffmpeg)
+    const result = await window.electronAPI.saveAudioBlob(Array.from(new Uint8Array(arrayBuffer)), extension);
     
     if (result.success) {
-      return result.filePath;
+      return result.filePath; // Returns path to raw input file (before conversion)
     } else {
       console.error('Failed to save audio blob:', result.error);
       return null;

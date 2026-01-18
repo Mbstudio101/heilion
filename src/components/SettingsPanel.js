@@ -24,6 +24,7 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
 
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
   const [whisperAvailable, setWhisperAvailable] = useState(false);
+  const [ffmpegAvailable, setFFmpegAvailable] = useState(false);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [healthStatus, setHealthStatus] = useState(null);
   const [courses, setCourses] = useState([]);
@@ -69,6 +70,7 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
     setHealthStatus(health);
     setOllamaAvailable(health.ollamaRunning);
     setWhisperAvailable(health.whisperReady);
+    setFFmpegAvailable(health.ffmpegReady);
     
     // Check Soprano TTS availability (try to connect to sidecar)
     checkSopranoAvailability();
@@ -287,11 +289,79 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
               value={settings.sttProvider}
               onChange={(e) => saveSettings({ sttProvider: e.target.value })}
             >
-              <option value="local" disabled={!whisperAvailable}>
-                Local (Whisper.cpp) {!whisperAvailable && '(Not available)'}
+              <option value="local" disabled={!whisperAvailable || !ffmpegAvailable}>
+                Local (Whisper.cpp) {(!whisperAvailable || !ffmpegAvailable) && '(Not available)'}
               </option>
               <option value="cloud">Cloud</option>
             </select>
+            
+            {/* Diagnostics: Show ffmpeg status */}
+            {healthStatus && (
+              <div style={{ 
+                marginTop: '8px', 
+                fontSize: '12px', 
+                color: ffmpegAvailable ? '#4caf50' : '#f44336',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}>
+                <span>{ffmpegAvailable ? '✓' : '✗'}</span>
+                <span>
+                  ffmpeg: {ffmpegAvailable ? 'Available' : 'Not found'}
+                  {healthStatus.ffmpegPath && ` (${healthStatus.ffmpegPath})`}
+                </span>
+              </div>
+            )}
+            
+            {/* Silence Timeout (Auto-stop) */}
+            <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
+              Silence Timeout (Auto-stop)
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '8px' }}>
+                <input
+                  type="range"
+                  min="900"
+                  max="1200"
+                  step="50"
+                  value={settings.silenceDuration || 1000}
+                  onChange={(e) => saveSettings({ silenceDuration: parseInt(e.target.value) })}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ minWidth: '60px', fontSize: '14px', color: '#aaa' }}>
+                  {(settings.silenceDuration || 1000) / 1000}s
+                </span>
+              </div>
+              <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
+                How long to wait for silence before auto-stopping (0.9-1.2s)
+              </div>
+            </label>
+            
+            {/* Whisper Model Selection */}
+            <label className="settings-label" style={{ display: 'block', marginTop: '12px' }}>
+              Whisper Model
+              <select
+                value={settings.whisperModel || 'base.en'}
+                onChange={(e) => saveSettings({ whisperModel: e.target.value })}
+                style={{
+                  width: '100%',
+                  background: '#222',
+                  color: '#fff',
+                  border: '1px solid #444',
+                  padding: '8px',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  marginTop: '4px',
+                  boxSizing: 'border-box'
+                }}
+              >
+                <option value="tiny.en">Tiny (fastest, less accurate)</option>
+                <option value="base.en">Base (balanced, recommended)</option>
+                <option value="small.en">Small (slower, more accurate)</option>
+                <option value="medium.en">Medium (best accuracy, requires more RAM)</option>
+              </select>
+              <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
+                Model files should be in ~/whisper.cpp/models/ directory
+              </div>
+            </label>
           </div>
 
           <div className="settings-section">

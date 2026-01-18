@@ -300,6 +300,109 @@ function TutorScreen() {
     const unsubscribeCapture = eventBus.on(EVENTS.CAPTURE_STOPPED, handleCaptureStopped);
     const unsubscribeSpeakStart = eventBus.on(EVENTS.SPEAK_START, () => setIsSpeaking(true));
     
+    // BARGE-IN: Stop TTS when user starts speaking while TTS is playing
+    // Setup continuous mic monitoring for barge-in (even when not recording)
+    let bargeInThreshold = 0.02; // RMS threshold for barge-in (slightly higher than silence)
+    let bargeInAnalyser = null;
+    let bargeInContext = null;
+    let bargeInStream = null;
+    let bargeInMonitoring = false;
+    
+    const startBargeInMonitoring = async () => {
+      if (bargeInMonitoring) return;
+      
+      try {
+        // Get mic stream for barge-in monitoring
+        bargeInStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        bargeInContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = bargeInContext.createMediaStreamSource(bargeInStream);
+        bargeInAnalyser = bargeInContext.createAnalyser();
+        bargeInAnalyser.fftSize = 256;
+        bargeInAnalyser.smoothingTimeConstant = 0.8;
+        source.connect(bargeInAnalyser);
+        
+        bargeInMonitoring = true;
+        
+        // Monitor mic amplitude for barge-in
+        const checkBargeIn = () => {
+          if (!bargeInMonitoring || !bargeInAnalyser) return;
+          
+          const bufferLength = bargeInAnalyser.frequencyBinCount;
+          const dataArray = new Uint8Array(bufferLength);
+          bargeInAnalyser.getByteTimeDomainData(dataArray);
+          
+          // Calculate RMS amplitude
+          let sumSquares = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            const normalized = (dataArray[i] - 128) / 128;
+            sumSquares += normalized * normalized;
+          }
+          const rms = Math.sqrt(sumSquares / bufferLength);
+          const level = Math.min(rms * 2, 1);
+          
+          // If user is speaking (above threshold) while TTS is playing, barge-in!
+          if (level > bargeInThreshold && isSpeakingRef.current && !isListeningRef.current) {
+            handleBargeIn();
+          }
+          
+          requestAnimationFrame(checkBargeIn);
+        };
+        
+        checkBargeIn();
+      } catch (error) {
+        console.error('Failed to start barge-in monitoring:', error);
+      }
+    };
+    
+    const stopBargeInMonitoring = () => {
+      bargeInMonitoring = false;
+      if (bargeInStream) {
+        bargeInStream.getTracks().forEach(track => track.stop());
+        bargeInStream = null;
+      }
+      if (bargeInContext) {
+        bargeInContext.close().catch(() => {});
+        bargeInContext = null;
+      }
+      bargeInAnalyser = null;
+    };
+    
+    const handleBargeIn = async () => {
+      // User started speaking while TTS is playing - barge-in!
+      const { stopSpeaking } = await import('../utils/ttsManager');
+      await stopSpeaking();
+      
+      // Stop barge-in monitoring (will start proper capture)
+      stopBargeInMonitoring();
+      
+      // Clear any pending auto-record timeout
+      if (professorTimeoutRef.current) {
+        clearTimeout(professorTimeoutRef.current);
+        professorTimeoutRef.current = null;
+      }
+      
+      // Start capture immediately
+      setStatus('Listening...');
+      await handleStartRecording('barge-in');
+    };
+    
+    // Start barge-in monitoring when TTS starts
+    const handleSpeakStartForBargeIn = () => {
+      setIsSpeaking(true);
+      if (!isListeningRef.current) {
+        startBargeInMonitoring();
+      }
+    };
+    
+    const unsubscribeSpeakStartForBargeIn = eventBus.on(EVENTS.SPEAK_START, handleSpeakStartForBargeIn);
+    
+    // Stop barge-in monitoring when TTS ends or capture starts
+    const handleCaptureStartedForBargeIn = () => {
+      stopBargeInMonitoring();
+    };
+    
+    const unsubscribeCaptureStartedForBargeIn = eventBus.on(EVENTS.CAPTURE_STARTED, handleCaptureStartedForBargeIn);
+    
     // Handle auto-start recording after tutor finishes speaking a question
     const handleSpeakEnd = async () => {
       setIsSpeaking(false);
@@ -326,9 +429,12 @@ function TutorScreen() {
         professorTimeoutRef.current = null;
       }
       stopWakeListener();
+      stopBargeInMonitoring(); // Clean up barge-in monitoring
       unsubscribeWake();
       unsubscribeCapture();
       unsubscribeSpeakStart();
+      unsubscribeSpeakStartForBargeIn();
+      unsubscribeCaptureStartedForBargeIn();
       unsubscribeSpeakEnd();
     };
   }, [handleWakeWordTriggered, handleCaptureStopped, handleStartRecording, loadActiveCourse]);

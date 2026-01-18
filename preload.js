@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkWhisper: () => ipcRenderer.invoke('check-whisper'),
   
   // Audio/Speech
-  runWhisper: (audioPath) => ipcRenderer.invoke('run-whisper', audioPath),
+    runWhisper: (audioPath, modelName) => ipcRenderer.invoke('run-whisper', audioPath, modelName),
   ttsSpeak: (text, provider) => ipcRenderer.invoke('tts-speak', text, provider),
   getMicPermission: () => ipcRenderer.invoke('get-mic-permission'),
   streamAudioToWake: (audioData) => ipcRenderer.send('stream-audio-to-wake', audioData),
@@ -29,8 +29,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Audio recording
   startAudioRecording: () => ipcRenderer.invoke('start-audio-recording'),
   stopAudioRecording: () => ipcRenderer.invoke('stop-audio-recording'),
-  saveAudioBlob: (arrayBuffer) => ipcRenderer.invoke('save-audio-blob', arrayBuffer),
+  saveAudioBlob: (arrayBuffer, extension) => ipcRenderer.invoke('save-audio-blob', arrayBuffer, extension),
   getAudioFilePath: () => ipcRenderer.invoke('get-audio-file-path'),
+  checkFFmpeg: () => ipcRenderer.invoke('check-ffmpeg'),
   
   // Window controls
   windowMinimize: () => ipcRenderer.invoke('window-minimize'),

@@ -166,7 +166,7 @@ function startSopranoSidecar() {
 
     sopranoProcess.stdout.on('data', (data) => {
       const output = data.toString().trim();
-      if (output.includes('Uvicorn running on')) {
+      if (output.includes('Uvicorn running on') || output.includes('Application startup complete')) {
         console.log('✓ Soprano TTS sidecar started successfully');
         clearTimeout(startupTimeout);
       } else {
@@ -176,9 +176,15 @@ function startSopranoSidecar() {
 
     sopranoProcess.stderr.on('data', (data) => {
       const error = data.toString().trim();
+      // Ignore port already in use errors (service might already be running)
+      if (error.includes('address already in use')) {
+        console.log('✓ Soprano TTS is already running on port', sopranoPort);
+        clearTimeout(startupTimeout);
+        return;
+      }
       console.error(`Soprano TTS error: ${error}`);
       // If it contains "Error: Soprano TTS not found", don't treat as fatal
-      if (error.includes('Soprano TTS not found')) {
+      if (error.includes('Soprano TTS not found') || error.includes('ModuleNotFoundError')) {
         console.warn('⚠ Soprano TTS package not available - using Web Speech API fallback');
         clearTimeout(startupTimeout);
       }

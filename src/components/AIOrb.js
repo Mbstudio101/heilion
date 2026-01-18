@@ -419,32 +419,57 @@ function AIOrb({ isListening, isThinking, isSpeaking }) {
       }
 
       // ============================================
-      // LAYER B: CORE BODY (radial gradient, translucent)
+      // LAYER B: CORE BODY (stable inner core, animated outer shell)
       // ============================================
-      // First, compute noisy edge path
+      // Compute animated outer edge path (shell animates, core is stable)
       const edgePoints = [];
+      const innerCoreRadius = currentParams.baseRadius * 0.65; // Inner core is stable at ~65% of base
+      
       for (let i = 0; i <= numPoints; i++) {
         const angle = (i / numPoints) * Math.PI * 2;
         const baseRadius = currentParams.baseRadius;
         
-        // Apply noise distortion
+        // Apply noise distortion (more on outer shell)
         const noiseX = Math.cos(angle) * 3 + timeRef.current * currentParams.noiseSpeed;
         const noiseY = Math.sin(angle) * 3 + timeRef.current * currentParams.noiseSpeed;
         const noiseValue = noise.noise(noiseX, noiseY);
         const noiseOffset = (noiseValue - 0.5) * currentParams.noiseAmount;
         
-        // Apply pulse from amplitude
+        // Apply pulse from amplitude (outer shell reacts more)
         const pulseOffset = amplitude * currentParams.pulseAmount;
         
-        // Final radius for this point
-        const radius = baseRadius + noiseOffset + pulseOffset;
+        // Final radius for outer edge (shell animates)
+        const outerRadius = baseRadius + noiseOffset + pulseOffset;
         
-        const x = centerX + Math.cos(angle) * radius;
-        const y = centerY + Math.sin(angle) * radius;
-        edgePoints.push({ x, y, angle, radius });
+        const x = centerX + Math.cos(angle) * outerRadius;
+        const y = centerY + Math.sin(angle) * outerRadius;
+        edgePoints.push({ x, y, angle, radius: outerRadius });
       }
 
-      // Draw core body with translucent radial gradient
+      // Draw core body with stable inner core and animated outer shell
+      // Use clipping path to create stable inner, animated outer
+      ctx.beginPath();
+      // Inner stable circle (doesn't animate)
+      ctx.arc(centerX, centerY, innerCoreRadius, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.save();
+      ctx.clip();
+      
+      // Core gradient - stable center, no animation
+      const coreGradient = ctx.createRadialGradient(
+        centerX, centerY, 0,
+        centerX, centerY, innerCoreRadius * 1.5
+      );
+      const c = currentParams.color;
+      coreGradient.addColorStop(0, `rgba(${c.r + 40}, ${c.g + 40}, ${c.b + 40}, 0.6)`); // Max alpha 0.6
+      coreGradient.addColorStop(0.5, `rgba(${c.r}, ${c.g}, ${c.b}, 0.48)`);
+      coreGradient.addColorStop(1, `rgba(${c.r * 0.8}, ${c.g * 0.8}, ${c.b * 0.8}, 0.35)`); // Min alpha 0.35
+      
+      ctx.fillStyle = coreGradient;
+      ctx.fill();
+      ctx.restore();
+
+      // Animated outer shell (ring between inner core and edge)
       ctx.beginPath();
       for (let i = 0; i < edgePoints.length; i++) {
         const pt = edgePoints[i];
@@ -455,24 +480,17 @@ function AIOrb({ isListening, isThinking, isSpeaking }) {
         }
       }
       ctx.closePath();
-
-      // Core gradient - brighter center, transparent edges
-      // Alpha range: 0.35-0.6 (translucent)
-      const coreGradient = ctx.createRadialGradient(
-        centerX - currentParams.baseRadius * 0.2,
-        centerY - currentParams.baseRadius * 0.2,
-        0,
-        centerX,
-        centerY,
-        currentParams.baseRadius * 1.3
-      );
-      const c = currentParams.color;
-      coreGradient.addColorStop(0, `rgba(${c.r + 40}, ${c.g + 40}, ${c.b + 40}, 0.6)`); // Max alpha 0.6
-      coreGradient.addColorStop(0.4, `rgba(${c.r}, ${c.g}, ${c.b}, 0.48)`);
-      coreGradient.addColorStop(0.8, `rgba(${c.r * 0.8}, ${c.g * 0.8}, ${c.b * 0.8}, 0.35)`); // Min alpha 0.35
-      coreGradient.addColorStop(1, `rgba(${c.r * 0.5}, ${c.g * 0.5}, ${c.b * 0.5}, 0)`); // Transparent edge
       
-      ctx.fillStyle = coreGradient;
+      // Create radial gradient for animated shell (from inner core edge to outer edge)
+      const shellGradient = ctx.createRadialGradient(
+        centerX, centerY, innerCoreRadius,
+        centerX, centerY, currentParams.baseRadius * 1.4
+      );
+      shellGradient.addColorStop(0, `rgba(${c.r * 0.8}, ${c.g * 0.8}, ${c.b * 0.8}, 0.35)`); // Connect to core
+      shellGradient.addColorStop(0.6, `rgba(${c.r}, ${c.g}, ${c.b}, 0.45)`);
+      shellGradient.addColorStop(1, `rgba(${c.r * 0.5}, ${c.g * 0.5}, ${c.b * 0.5}, 0)`); // Transparent outer edge
+      
+      ctx.fillStyle = shellGradient;
       ctx.fill();
 
       // ============================================
@@ -503,8 +521,9 @@ function AIOrb({ isListening, isThinking, isSpeaking }) {
       }
 
       // ============================================
-      // LAYER D: EDGE (very faint stroke for definition, translucent)
+      // LAYER D: ANIMATED OUTER SHELL EDGE (prominent, reactive)
       // ============================================
+      // Outer shell edge animates with noise and amplitude
       ctx.beginPath();
       for (let i = 0; i < edgePoints.length; i++) {
         const pt = edgePoints[i];
@@ -516,10 +535,14 @@ function AIOrb({ isListening, isThinking, isSpeaking }) {
       }
       ctx.closePath();
 
-      // Very faint edge stroke with alpha fade
+      // Outer edge stroke - more prominent and reacts to amplitude
       const edgeColor = currentParams.color;
-      ctx.strokeStyle = `rgba(${edgeColor.r}, ${edgeColor.g}, ${edgeColor.b}, 0.15)`;
-      ctx.lineWidth = 0.5;
+      // Edge alpha varies with amplitude (more visible when active)
+      const edgeAlpha = stateRef.current === 'idle' ? 0.15 : (0.2 + amplitude * 0.15);
+      const edgeWidth = stateRef.current === 'idle' ? 1.0 : (1.0 + amplitude * 1.5);
+      
+      ctx.strokeStyle = `rgba(${edgeColor.r}, ${edgeColor.g}, ${edgeColor.b}, ${edgeAlpha})`;
+      ctx.lineWidth = edgeWidth;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.stroke();

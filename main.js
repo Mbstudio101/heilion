@@ -35,6 +35,7 @@ const {
   runWhisperTranscription 
 } = require('./main/whisperHandler');
 const { speakWithSoprano, speakWithKokoro } = require('./main/ttsHandler');
+const { checkFFmpegAvailable, convertToWhisperWAV } = require('./main/audioConverter');
 
 let mainWindow = null;
 
@@ -400,9 +401,10 @@ ipcMain.handle('check-whisper', async () => {
   return await checkWhisperAvailable();
 });
 
-ipcMain.handle('run-whisper', async (event, audioPath) => {
+ipcMain.handle('run-whisper', async (event, audioPath, modelName = null) => {
   // Use the whisper handler module which gracefully handles missing whisper.cpp
-  return await runWhisperTranscription(audioPath);
+  // modelName can be 'base.en', 'small.en', 'tiny.en', 'medium.en', etc.
+  return await runWhisperTranscription(audioPath, modelName);
 });
 
 // TTS operations
@@ -482,21 +484,52 @@ ipcMain.handle('stop-audio-recording', async () => {
   return { success: true, filePath: path };
 });
 
-ipcMain.handle('save-audio-blob', async (event, arrayBuffer) => {
+ipcMain.handle('save-audio-blob', async (event, arrayBuffer, extension = 'webm') => {
   const os = require('os');
   const path = require('path');
   
   try {
     const tempDir = os.tmpdir();
-    const filePath = path.join(tempDir, `heilion_recording_${Date.now()}.wav`);
+    const timestamp = Date.now();
     
-    // Write array buffer to file
-    fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
+    // Save raw blob (WebM/MP4/Opus) with appropriate extension
+    const rawFilePath = path.join(tempDir, `heilion_recording_${timestamp}.${extension}`);
+    fs.writeFileSync(rawFilePath, Buffer.from(arrayBuffer));
     
-    return { success: true, filePath };
+    // Convert to Whisper-compatible WAV using ffmpeg
+    const wavFilePath = path.join(tempDir, `heilion_recording_${timestamp}.wav`);
+    const conversionResult = await convertToWhisperWAV(rawFilePath, wavFilePath);
+    
+    if (!conversionResult.success) {
+      // Clean up raw file if conversion failed
+      try {
+        fs.unlinkSync(rawFilePath);
+      } catch (error) {
+        // Ignore cleanup errors
+      }
+      return { 
+        success: false, 
+        error: conversionResult.error || 'Failed to convert audio to WAV',
+        suggestion: conversionResult.suggestion || 'Please install ffmpeg: brew install ffmpeg'
+      };
+    }
+    
+    // Clean up raw file after successful conversion
+    try {
+      fs.unlinkSync(rawFilePath);
+    } catch (error) {
+      console.warn('Failed to clean up raw audio file:', error);
+      // Non-fatal, continue
+    }
+    
+    return { success: true, filePath: wavFilePath };
   } catch (error) {
     return { success: false, error: error.message };
   }
+});
+
+ipcMain.handle('check-ffmpeg', async () => {
+  return await checkFFmpegAvailable();
 });
 
 ipcMain.handle('get-audio-file-path', () => {
