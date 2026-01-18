@@ -1,5 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { getSettings, updateSettings, applyPreset, healthCheckAll, autoDetectOllama } from '../utils/appBootstrap';
+
+// Check for updates manually from Settings
+const checkForUpdatesManually = async () => {
+  if (window.electronAPI && window.electronAPI.checkForUpdates) {
+    try {
+      await window.electronAPI.checkForUpdates();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Update API not available' };
+};
 import { getDeckLibrary, deleteDeck } from '../utils/deckManager';
 import { getAvailableLanguages, getAvailableVoices, listTTSProviders, listVoices, setVoiceSelection, testVoice } from '../utils/ttsManager';
 import './SettingsPanel.css';
@@ -25,6 +38,8 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
   const [whisperAvailable, setWhisperAvailable] = useState(false);
   const [ffmpegAvailable, setFFmpegAvailable] = useState(false);
+  const [appVersion, setAppVersion] = useState('1.0.0');
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [healthStatus, setHealthStatus] = useState(null);
   const [courses, setCourses] = useState([]);
@@ -44,8 +59,42 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
       loadCourses();
       loadTtsLanguages();
       loadTtsProviders();
+      loadAppVersion();
     }
   }, [isOpen]);
+  
+  const loadAppVersion = async () => {
+    try {
+      if (window.electronAPI && window.electronAPI.getAppVersion) {
+        const result = await window.electronAPI.getAppVersion();
+        if (result && result.version) {
+          setAppVersion(result.version);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load app version:', error);
+    }
+  };
+  
+  const handleCheckForUpdates = async () => {
+    setCheckingUpdate(true);
+    try {
+      if (window.electronAPI && window.electronAPI.checkForUpdates) {
+        await window.electronAPI.checkForUpdates();
+        // The UpdateNotification component will handle showing the update status
+        setTimeout(() => {
+          setCheckingUpdate(false);
+        }, 2000);
+      } else {
+        alert('Update checking is not available in development mode');
+        setCheckingUpdate(false);
+      }
+    } catch (error) {
+      console.error('Failed to check for updates:', error);
+      alert(`Failed to check for updates: ${error.message}`);
+      setCheckingUpdate(false);
+    }
+  };
 
   useEffect(() => {
     // Load voices when provider changes
@@ -762,6 +811,34 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
                 No courses yet. Drop a PPTX file on the main screen to import.
               </p>
             )}
+          </div>
+
+          <div className="settings-section">
+            <h3>About & Updates</h3>
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '8px' }}>
+                Version: {appVersion}
+              </div>
+              <button
+                onClick={handleCheckForUpdates}
+                disabled={checkingUpdate}
+                style={{
+                  padding: '10px 20px',
+                  background: checkingUpdate ? '#444' : '#4a90e2',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: checkingUpdate ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500'
+                }}
+              >
+                {checkingUpdate ? 'Checking...' : 'Check for Updates'}
+              </button>
+            </div>
+            <div style={{ fontSize: '12px', color: '#888', marginTop: '8px' }}>
+              Updates are checked automatically. Click to check manually.
+            </div>
           </div>
         </div>
       </div>

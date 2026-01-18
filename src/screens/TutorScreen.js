@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import SettingsPanel from '../components/SettingsPanel';
 import AIOrb from '../components/AIOrb';
+import UpdateNotification from '../components/UpdateNotification';
 import { TutorEngine, TUTOR_STATES } from '../utils/tutorEngine';
 import { importDeckFromPPTX, getDeckLibrary } from '../utils/deckManager';
 import { beginActiveCapture, cancelActiveCapture } from '../utils/audioCaptureManager';
@@ -617,6 +618,8 @@ function TutorScreen() {
           initializeTutor(courseId);
         }}
       />
+      
+      <UpdateNotification />
     </div>
   );
 }

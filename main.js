@@ -5,6 +5,7 @@ app.setName('Heilion');
 
 // Now load the rest of Electron modules and other dependencies
 const { BrowserWindow, ipcMain, dialog, systemPreferences } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 
@@ -262,6 +263,14 @@ app.whenReady().then(async () => {
   try {
     mainWindow = createWindow();
     console.log('✓ Main window created');
+    
+    // Set main window for update manager
+    setUpdateMainWindow(mainWindow);
+    
+    // Start periodic update checks (check on startup, then every 24 hours)
+    if (app.isPackaged) {
+      startPeriodicUpdateCheck(24);
+    }
   } catch (error) {
     console.error('✗ Failed to create main window:', error);
     app.quit();
@@ -306,6 +315,7 @@ app.on('before-quit', () => {
   stopWakeWordSidecar();
   stopSopranoSidecar();
   stopKokoroSidecar();
+  stopPeriodicUpdateCheck();
   closeDatabase();
 });
 
@@ -530,6 +540,30 @@ ipcMain.handle('save-audio-blob', async (event, arrayBuffer, extension = 'webm')
 
 ipcMain.handle('check-ffmpeg', async () => {
   return await checkFFmpegAvailable();
+});
+
+// Update management IPC handlers
+ipcMain.handle('check-for-updates', async () => {
+  checkForUpdates(true);
+  return { success: true };
+});
+
+ipcMain.handle('download-update', async () => {
+  downloadUpdate();
+  return { success: true };
+});
+
+ipcMain.handle('install-update', async () => {
+  quitAndInstall();
+  return { success: true };
+});
+
+ipcMain.handle('get-app-version', async () => {
+  return { version: app.getVersion() };
+});
+
+ipcMain.handle('get-update-version', async () => {
+  return { version: getCurrentVersion() };
 });
 
 ipcMain.handle('get-audio-file-path', () => {
