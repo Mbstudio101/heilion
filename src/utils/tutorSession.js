@@ -32,11 +32,86 @@ export function getPersonaPrompt(persona, teacherStyle = true, difficulty = 'med
   return `${basePrompt} ${styleModifier} ${difficultyModifier}`;
 }
 
+// Build grounded prompt with relevant course content (RAG-style retrieval)
+async function buildGroundedPrompt(userQuestion, courseId) {
+  if (!courseId) return '';
+  
+  try {
+    // Retrieve relevant slides (keyword matching)
+    const slidesResult = await window.electronAPI.dbQuery(
+      `SELECT * FROM slides WHERE deck_id = ? 
+       ORDER BY slide_number`,
+      [courseId]
+    );
+    
+    if (!slidesResult.success || !slidesResult.data) return '';
+    
+    const slides = slidesResult.data;
+    const questionLower = userQuestion.toLowerCase();
+    
+    // Find relevant slides (simple keyword matching - can be improved with semantic search)
+    const relevantSlides = slides.filter(slide => {
+      const title = (slide.title || '').toLowerCase();
+      const content = (slide.content || '').toLowerCase();
+      const notes = (slide.notes || '').toLowerCase();
+      
+      // Check if any words from question appear in slide
+      const questionWords = questionLower.split(/\s+/).filter(w => w.length > 3);
+      return questionWords.some(word => 
+        title.includes(word) || content.includes(word) || notes.includes(word)
+      );
+    }).slice(0, 5); // Limit to 5 most relevant
+    
+    // Retrieve relevant concepts from mastery table
+    const conceptsResult = await window.electronAPI.dbQuery(
+      `SELECT DISTINCT concept FROM mastery WHERE deck_id = ?`,
+      [courseId]
+    );
+    
+    const relevantConcepts = [];
+    if (conceptsResult.success && conceptsResult.data) {
+      conceptsResult.data.forEach(c => {
+        const conceptLower = (c.concept || '').toLowerCase();
+        if (questionLower.includes(conceptLower) || conceptLower.includes(questionLower.split(' ')[0])) {
+          relevantConcepts.push(c.concept);
+        }
+      });
+    }
+    
+    // Build context string
+    let context = '';
+    
+    if (relevantSlides.length > 0) {
+      context += '\n\nRelevant Course Content:\n';
+      relevantSlides.forEach((slide, idx) => {
+        context += `\nSlide ${slide.slide_number} - ${slide.title || 'Untitled'}:\n`;
+        context += `${(slide.content || '').substring(0, 200)}${slide.content && slide.content.length > 200 ? '...' : ''}\n`;
+        if (slide.notes) {
+          context += `Notes: ${slide.notes.substring(0, 150)}${slide.notes.length > 150 ? '...' : ''}\n`;
+        }
+      });
+    }
+    
+    if (relevantConcepts.length > 0) {
+      context += `\n\nKey Concepts Mentioned: ${relevantConcepts.join(', ')}\n`;
+    }
+    
+    return context;
+  } catch (error) {
+    console.error('Failed to build grounded prompt:', error);
+    return '';
+  }
+}
+
 export async function gradeAnswer(deckContext, question, transcriptText, personaConfig) {
   const persona = personaConfig?.persona || 'Virgo';
   const personaPrompt = getPersonaPrompt(persona, true, personaConfig?.difficulty || 'medium');
   const llmProvider = personaConfig?.llmProvider || 'local';
   const settings = personaConfig;
+  
+  // Retrieve relevant course content for grounded prompt
+  const courseId = deckContext?.id || personaConfig?.activeCourseId;
+  const courseContext = await buildGroundedPrompt(question.question_text || transcriptText, courseId);
   
   const gradingPrompt = `${personaPrompt}
 
@@ -47,7 +122,7 @@ The correct answer should cover: ${question.correct_answer || question.idealAnsw
 
 Student's answer (transcript): ${transcriptText}
 
-${deckContext ? `Context: This is from deck "${deckContext.name}".` : ''}
+${deckContext ? `Course: "${deckContext.name}"` : ''}${courseContext}
 
 Grade this answer and provide a JSON response with EXACTLY these fields:
 {

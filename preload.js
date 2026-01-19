@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // File operations
   importPPTX: () => ipcRenderer.invoke('import-pptx'),
+  copyPPTXToStorage: (sourcePath, courseId) => ipcRenderer.invoke('copy-pptx-to-storage', sourcePath, courseId),
   
   // Provider checks
   checkOllama: () => ipcRenderer.invoke('check-ollama'),

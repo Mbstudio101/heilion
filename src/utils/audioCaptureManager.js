@@ -77,16 +77,27 @@ export async function beginActiveCapture(mode = 'auto') {
     };
 
     mediaRecorder.onstop = async () => {
-      const blob = new Blob(audioChunks, { type: mimeType });
-      
-      // Cleanup audio resources now (before saving)
-      cleanup();
-      
-      // Save raw blob (WebM/MP4) - main process will convert to WAV using ffmpeg
-      // DO NOT convert to WAV in JavaScript (creates invalid files)
-      const filePath = await saveAudioBlob(blob);
-      
-      eventBus.emit(EVENTS.CAPTURE_STOPPED, { filePath });
+      try {
+        const blob = new Blob(audioChunks, { type: mimeType });
+        
+        // Cleanup audio resources now (before saving)
+        cleanup();
+        
+        // Save raw blob (WebM/MP4) - main process will convert to WAV using ffmpeg
+        // DO NOT convert to WAV in JavaScript (creates invalid files)
+        const filePath = await saveAudioBlob(blob);
+        
+        if (filePath) {
+          eventBus.emit(EVENTS.CAPTURE_STOPPED, { filePath });
+        } else {
+          console.error('Failed to save audio - filePath is null');
+          eventBus.emit(EVENTS.CAPTURE_STOPPED, { filePath: null, error: 'Failed to save audio file' });
+        }
+      } catch (error) {
+        console.error('Error in mediaRecorder.onstop:', error);
+        cleanup();
+        eventBus.emit(EVENTS.CAPTURE_STOPPED, { filePath: null, error: error.message });
+      }
     };
 
     // Start recording
@@ -109,63 +120,78 @@ export async function beginActiveCapture(mode = 'auto') {
 }
 
 function startSilenceDetection() {
+  if (!analyser) {
+    console.error('Cannot start silence detection - analyser is null');
+    return;
+  }
+
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Uint8Array(bufferLength);
   const timeDataArray = new Uint8Array(bufferLength);
 
+  // Reset recording start time when silence detection starts
+  recordingStartTime = Date.now();
+  lastSoundTime = Date.now();
+
   const checkSilence = () => {
-    if (!isRecording || !analyser) return;
-
-    analyser.getByteFrequencyData(dataArray);
-    analyser.getByteTimeDomainData(timeDataArray);
-    
-    // Calculate average volume across frequency bins
-    const average = dataArray.reduce((a, b) => a + b) / bufferLength;
-    const volume = average / 255;
-
-    // Calculate RMS (root mean square) from time domain data for better speech detection
-    let sumSquares = 0;
-    for (let i = 0; i < timeDataArray.length; i++) {
-      const normalized = (timeDataArray[i] - 128) / 128;
-      sumSquares += normalized * normalized;
-    }
-    const rms = Math.sqrt(sumSquares / timeDataArray.length);
-    const normalizedLevel = Math.min(rms * 2, 1);
-
-    // Emit LISTEN_LEVEL event for orb reactivity (30-60 times/sec)
-    eventBus.emit(EVENTS.LISTEN_LEVEL, { level: normalizedLevel });
-
-    // User is speaking if volume OR RMS is above threshold
-    const isSpeaking = volume > silenceThreshold || rms > silenceThreshold;
-    
-    // BARGE-IN: If user starts speaking while TTS is playing, stop TTS and continue capture
-    // Check if TTS is playing (speaking state) and user just started speaking
-    if (isSpeaking && !isRecording) {
-      // User started speaking - check if TTS is active via event bus
-      // This will be handled in TutorScreen.js via LISTEN_LEVEL events
+    // Stop if recording ended or analyser is gone
+    if (!isRecording || !analyser) {
+      return;
     }
 
-    if (isSpeaking) {
-      lastSoundTime = Date.now();
-    } else {
-      const silenceTime = Date.now() - lastSoundTime;
-      const recordingDuration = Date.now() - recordingStartTime;
+    try {
+      analyser.getByteFrequencyData(dataArray);
+      analyser.getByteTimeDomainData(timeDataArray);
       
-      // Only auto-stop if:
-      // 1. Silence duration exceeded threshold (configurable from settings)
-      // 2. Minimum recording duration has passed (to avoid stopping immediately)
-      const silenceDuration = getSilenceDuration();
-      if (silenceTime > silenceDuration && recordingDuration > minimumRecordingDuration) {
-        // Auto-stop on silence
-        cancelActiveCapture();
-        return;
+      // Calculate average volume across frequency bins
+      const average = dataArray.reduce((a, b) => a + b) / bufferLength;
+      const volume = average / 255;
+
+      // Calculate RMS (root mean square) from time domain data for better speech detection
+      let sumSquares = 0;
+      for (let i = 0; i < timeDataArray.length; i++) {
+        const normalized = (timeDataArray[i] - 128) / 128;
+        sumSquares += normalized * normalized;
+      }
+      const rms = Math.sqrt(sumSquares / timeDataArray.length);
+      const normalizedLevel = Math.min(rms * 2, 1);
+
+      // Emit LISTEN_LEVEL event for orb reactivity (30-60 times/sec)
+      eventBus.emit(EVENTS.LISTEN_LEVEL, { level: normalizedLevel });
+
+      // User is speaking if volume OR RMS is above threshold
+      const isSpeaking = volume > silenceThreshold || rms > silenceThreshold;
+
+      if (isSpeaking) {
+        lastSoundTime = Date.now();
+      } else {
+        const silenceTime = Date.now() - lastSoundTime;
+        const recordingDuration = Date.now() - recordingStartTime;
+        
+        // Only auto-stop if:
+        // 1. Silence duration exceeded threshold (configurable from settings)
+        // 2. Minimum recording duration has passed (to avoid stopping immediately)
+        const silenceDuration = getSilenceDuration();
+        if (silenceTime > silenceDuration && recordingDuration > minimumRecordingDuration) {
+          // Auto-stop on silence
+          console.log(`Auto-stopping capture: silence=${silenceTime}ms, duration=${recordingDuration}ms`);
+          cancelActiveCapture();
+          return; // Stop the loop
+        }
+      }
+
+      // Continue checking
+      requestAnimationFrame(checkSilence);
+    } catch (error) {
+      console.error('Error in silence detection loop:', error);
+      // Try to continue, but stop if recording is no longer active
+      if (isRecording && analyser) {
+        requestAnimationFrame(checkSilence);
       }
     }
-
-    requestAnimationFrame(checkSilence);
   };
 
-  recordingStartTime = Date.now();
+  // Start the detection loop
   checkSilence();
 }
 
@@ -217,6 +243,12 @@ function cleanup() {
 // Save raw audio blob (WebM/MP4/Opus) - main process will convert to WAV using ffmpeg
 async function saveAudioBlob(blob) {
   try {
+    // Check if blob is empty
+    if (!blob || blob.size === 0) {
+      console.error('Audio blob is empty');
+      return null;
+    }
+
     // Get blob type to determine extension
     const blobType = blob.type || 'audio/webm';
     const extension = blobType.includes('webm') ? 'webm' : 
@@ -226,13 +258,26 @@ async function saveAudioBlob(blob) {
     // Convert blob to ArrayBuffer for IPC transfer
     const arrayBuffer = await blob.arrayBuffer();
     
-    // Send to main process to save raw blob (main will convert to WAV with ffmpeg)
-    const result = await window.electronAPI.saveAudioBlob(Array.from(new Uint8Array(arrayBuffer)), extension);
+    // Convert ArrayBuffer to Uint8Array, then to regular array for IPC
+    // Electron IPC can handle arrays but we need to ensure it's a proper array
+    const uint8Array = new Uint8Array(arrayBuffer);
+    const arrayData = Array.from(uint8Array);
     
-    if (result.success) {
-      return result.filePath; // Returns path to raw input file (before conversion)
+    // Send to main process to save raw blob (main will convert to WAV with ffmpeg)
+    // Add timeout to prevent hanging
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('saveAudioBlob timeout after 30s')), 30000)
+    );
+    
+    const result = await Promise.race([
+      window.electronAPI.saveAudioBlob(arrayData, extension),
+      timeoutPromise
+    ]);
+    
+    if (result && result.success) {
+      return result.filePath; // Returns path to converted WAV file
     } else {
-      console.error('Failed to save audio blob:', result.error);
+      console.error('Failed to save audio blob:', result?.error || 'Unknown error');
       return null;
     }
   } catch (error) {

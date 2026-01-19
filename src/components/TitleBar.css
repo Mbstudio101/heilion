@@ -2,9 +2,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 32px;
-  background: #1a1a1a;
-  border-bottom: 1px solid #2a2a2a;
+  height: 28px;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   -webkit-app-region: drag;
   user-select: none;
   z-index: 10000;
@@ -12,6 +14,26 @@
   top: 0;
   left: 0;
   right: 0;
+}
+
+/* macOS specific title bar */
+.mac-title-bar {
+  padding-left: 0;
+  height: 28px;
+  background: transparent;
+  border-bottom: none;
+}
+
+.mac-traffic-lights {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  -webkit-app-region: no-drag;
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .title-bar-drag-region {
@@ -79,50 +101,61 @@
   font-weight: 400;
 }
 
-/* macOS specific styling */
-.title-bar[data-platform="darwin"] {
-  padding-left: 78px; /* Space for traffic lights */
-}
-
-.title-bar[data-platform="darwin"] .title-bar-controls {
-  position: absolute;
-  left: 12px;
-  top: 0;
-}
-
-.title-bar[data-platform="darwin"] .title-bar-button {
+/* macOS traffic light buttons */
+.mac-button {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  margin-right: 8px;
-  margin-top: 8px;
-  font-size: 0;
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s, transform 0.1s;
+  position: relative;
+  -webkit-app-region: no-drag;
 }
 
-.title-bar[data-platform="darwin"] .title-bar-button.close {
+.mac-button:hover {
+  opacity: 0.8;
+  transform: scale(1.1);
+}
+
+.mac-button:active {
+  transform: scale(0.95);
+}
+
+.mac-button.close {
   background: #ff5f57;
 }
 
-.title-bar[data-platform="darwin"] .title-bar-button.close:hover {
-  background: #ff5f57;
+.mac-button.close:hover {
+  background: #ff453a;
 }
 
-.title-bar[data-platform="darwin"] .title-bar-button.minimize {
+.mac-button.minimize {
   background: #ffbd2e;
 }
 
-.title-bar[data-platform="darwin"] .title-bar-button.minimize:hover {
-  background: #ffbd2e;
+.mac-button.minimize:hover {
+  background: #ffcc02;
 }
 
-.title-bar[data-platform="darwin"] .title-bar-button.maximize {
+.mac-button.maximize {
   background: #28ca42;
 }
 
-.title-bar[data-platform="darwin"] .title-bar-button.maximize:hover {
-  background: #28ca42;
+.mac-button.maximize:hover {
+  background: #30d158;
 }
 
-.title-bar[data-platform="darwin"] .title-bar-button span {
-  display: none;
+.mac-button svg {
+  display: none; /* Hide SVG circles - use background color instead */
+}
+
+.mac-title-bar .title-bar-drag-region {
+  margin-left: 78px; /* Space for traffic lights */
+  padding-left: 12px;
 }

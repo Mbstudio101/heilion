@@ -1,5 +1,6 @@
 // Single-screen Voice Mode - the main app screen
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import TitleBar from '../components/TitleBar';
 import SettingsPanel from '../components/SettingsPanel';
 import AIOrb from '../components/AIOrb';
 import UpdateNotification from '../components/UpdateNotification';
@@ -523,13 +524,15 @@ function TutorScreen() {
   };
 
   return (
-    <div 
-      className={`voice-mode-screen ${dragOver ? 'drag-over' : ''}`}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-    >
+    <>
+      <TitleBar />
+      <div 
+        className={`voice-mode-screen ${dragOver ? 'drag-over' : ''}`}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
       <button 
         className="gear-btn" 
         onClick={() => setSettingsOpen(true)}
@@ -620,7 +623,8 @@ function TutorScreen() {
       />
       
       <UpdateNotification />
-    </div>
+      </div>
+    </>
   );
 }
 

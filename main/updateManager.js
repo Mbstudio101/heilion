@@ -6,8 +6,8 @@ let mainWindow = null;
 let updateCheckInterval = null;
 
 // Configure auto-updater
-autoUpdater.setAutoDownload(false); // Don't auto-download, let user choose
-autoUpdater.setAutoInstallOnAppQuit(true); // Auto-install on app quit after download
+autoUpdater.autoDownload = false; // Don't auto-download, let user choose
+autoUpdater.autoInstallOnAppQuit = true; // Auto-install on app quit after download
 
 // Update events
 autoUpdater.on('checking-for-update', () => {
@@ -136,7 +136,24 @@ function stopPeriodicUpdateCheck() {
 }
 
 function getCurrentVersion() {
-  return autoUpdater.currentVersion.version;
+  try {
+    // Try to get from autoUpdater first (works in packaged app)
+    if (autoUpdater.currentVersion && autoUpdater.currentVersion.version) {
+      return autoUpdater.currentVersion.version;
+    }
+  } catch (e) {
+    // Fall back to package.json version
+  }
+  // Fallback: read from package.json
+  const path = require('path');
+  const fs = require('fs');
+  const packagePath = path.join(__dirname, '../../package.json');
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    return packageJson.version || '1.0.0';
+  } catch (e) {
+    return '1.0.0';
+  }
 }
 
 module.exports = {

@@ -189,6 +189,28 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
   const handleProviderPreset = (preset) => {
     applyPreset(preset);
     loadSettings(); // Reload to reflect changes
+    
+    // Provide user feedback
+    if (preset === 'accuracy' || preset === 'cloud') {
+      const currentSettings = getSettings();
+      const needsKeys = (currentSettings.sttProvider === 'cloud' || currentSettings.llmProvider === 'cloud');
+      
+      if (needsKeys) {
+        // Show alert if API keys are needed
+        setTimeout(() => {
+          alert('Best Accuracy preset applied! Make sure you have API keys configured in the API Keys section for cloud providers to work.');
+        }, 100);
+      } else {
+        // Just show confirmation
+        setTimeout(() => {
+          alert('Best Accuracy preset applied! Settings updated.');
+        }, 100);
+      }
+    } else {
+      setTimeout(() => {
+        alert('Offline-First preset applied! Settings updated.');
+      }, 100);
+    }
   };
 
   const handleSaveApiKey = async (provider, key) => {
@@ -324,8 +346,8 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
                 Offline-First
               </button>
               <button
-                className={settings.providerPreset === 'cloud' ? 'active' : ''}
-                onClick={() => handleProviderPreset('cloud')}
+                className={settings.providerPreset === 'accuracy' || settings.providerPreset === 'cloud' ? 'active' : ''}
+                onClick={() => handleProviderPreset('accuracy')}
               >
                 Best Accuracy (Cloud)
               </button>

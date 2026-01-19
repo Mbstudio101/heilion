@@ -64,6 +64,36 @@ function initDatabase() {
       FOREIGN KEY (slide_id) REFERENCES slides(id) ON DELETE CASCADE,
       UNIQUE(deck_id, slide_id, concept)
     );
+    
+    CREATE TABLE IF NOT EXISTS course_outline (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deck_id INTEGER NOT NULL,
+      topic_title TEXT NOT NULL,
+      subtopics TEXT, -- JSON array
+      learning_objectives TEXT, -- JSON array
+      topic_order INTEGER,
+      FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
+    );
+    
+    CREATE TABLE IF NOT EXISTS course_concepts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deck_id INTEGER NOT NULL,
+      term TEXT NOT NULL,
+      definition TEXT,
+      relationships TEXT, -- JSON array
+      FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+      UNIQUE(deck_id, term)
+    );
+    
+    CREATE TABLE IF NOT EXISTS course_misconceptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deck_id INTEGER NOT NULL,
+      topic TEXT,
+      misconception TEXT NOT NULL,
+      correction TEXT,
+      confusing_pairs TEXT, -- JSON array
+      FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
+    );
   `);
   
   return db;

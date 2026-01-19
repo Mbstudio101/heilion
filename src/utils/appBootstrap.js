@@ -195,7 +195,8 @@ export function applyPreset(preset) {
       sttFallback: false,
       llmFallback: false
     });
-  } else if (preset === 'accuracy') {
+  } else if (preset === 'accuracy' || preset === 'cloud') {
+    // Handle both 'accuracy' and 'cloud' for backward compatibility
     updateSettings({
       providerPreset: 'accuracy',
       sttProvider: 'cloud',
@@ -241,6 +242,7 @@ function getDefaultSettings() {
     difficulty: 'medium',
     ollamaModel: 'llama2',
     ollamaUrl: 'http://localhost:11434',
+    activeCourseId: null, // Currently active course/deck ID
     // Voice Catalog settings
     ttsLanguage: 'en',
     voiceId: null, // Voice ID for cloud providers or model variant for Soprano

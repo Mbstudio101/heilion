@@ -1,5 +1,6 @@
 /* Voice Mode Screen - Single-screen immersive UI */
 .voice-mode-screen {
+  padding-top: 28px; /* Space for custom title bar */
   width: 100vw;
   height: 100vh;
   background: #000000;
@@ -42,7 +43,7 @@
 
 .gear-btn {
   position: fixed;
-  top: 6px;
+  top: 34px; /* Below title bar (28px height + 6px spacing) */
   right: 12px;
   background: transparent;
   color: #888888;

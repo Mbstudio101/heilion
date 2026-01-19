@@ -37,6 +37,15 @@ const {
 } = require('./main/whisperHandler');
 const { speakWithSoprano, speakWithKokoro } = require('./main/ttsHandler');
 const { checkFFmpegAvailable, convertToWhisperWAV } = require('./main/audioConverter');
+const { 
+  setMainWindow,
+  checkForUpdates,
+  downloadUpdate,
+  quitAndInstall,
+  startPeriodicUpdateCheck,
+  stopPeriodicUpdateCheck,
+  getCurrentVersion
+} = require('./main/updateManager');
 
 let mainWindow = null;
 
@@ -45,14 +54,8 @@ function createWindow() {
     width: 1200,
     height: 800,
     backgroundColor: '#000000',
-    frame: true, // Use native window frame
-    titleBarStyle: 'default', // Use native title bar
+    frame: false, // Use frameless window - this removes ALL native chrome including traffic lights
     transparent: false,
-    titleBarOverlay: {
-      color: '#000000', // Match background
-      symbolColor: '#888888',
-      height: 28 // Standard macOS title bar height
-    },
     webPreferences: {
       // In production, if running from build/electron.js, preload.js is in same directory
       // Otherwise, it's at ./preload.js (same directory as main.js)
@@ -265,7 +268,7 @@ app.whenReady().then(async () => {
     console.log('✓ Main window created');
     
     // Set main window for update manager
-    setUpdateMainWindow(mainWindow);
+    setMainWindow(mainWindow);
     
     // Start periodic update checks (check on startup, then every 24 hours)
     if (app.isPackaged) {
@@ -347,6 +350,29 @@ ipcMain.handle('import-pptx', async (event) => {
     const fileData = fs.readFileSync(filePath);
     return { success: true, filePath, fileData: fileData.buffer };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Copy PPTX file to app storage (Courses directory)
+ipcMain.handle('copy-pptx-to-storage', async (event, sourcePath, courseId) => {
+  try {
+    const appDataPath = app.getPath('userData');
+    const coursesDir = path.join(appDataPath, 'Courses', courseId.toString());
+    
+    // Create Courses/<courseId> directory if it doesn't exist
+    if (!fs.existsSync(coursesDir)) {
+      fs.mkdirSync(coursesDir, { recursive: true });
+    }
+    
+    const destPath = path.join(coursesDir, 'source.pptx');
+    
+    // Copy file
+    fs.copyFileSync(sourcePath, destPath);
+    
+    return { success: true, destinationPath: destPath };
+  } catch (error) {
+    console.error('Failed to copy PPTX to storage:', error);
     return { success: false, error: error.message };
   }
 });

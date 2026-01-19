@@ -1,8 +1,14 @@
 // Deck import and management functions
 import { parsePPTX, parsePPTXFromBuffer } from './pptxParser';
+import { eventBus, EVENTS } from './eventBus';
+import { buildCourseOutline, extractConceptsAndRelationships, identifyMisconceptions } from './courseBrainBuilder';
 
 export async function importDeckFromPPTX(filePath) {
   try {
+    // Emit import started event
+    eventBus.emit(EVENTS.COURSE_IMPORT_STARTED);
+    eventBus.emit(EVENTS.ORB_STATE, 'thinking');
+
     // Import PPTX via Electron dialog
     const result = await window.electronAPI.importPPTX();
     if (!result.success || !result.filePath) {
@@ -12,6 +18,7 @@ export async function importDeckFromPPTX(filePath) {
     const filePath = result.filePath;
     
     // Parse PPTX (will use parsePPTXFromBuffer if fileData is provided)
+    eventBus.emit(EVENTS.COURSE_BRAIN_BUILD_STARTED);
     const parseResult = result.fileData 
       ? await parsePPTXFromBuffer(result.fileData)
       : await parsePPTX(filePath);
@@ -20,10 +27,13 @@ export async function importDeckFromPPTX(filePath) {
       return { success: false, error: parseResult.error };
     }
 
+    // Emit parsed event
+    eventBus.emit(EVENTS.PPTX_PARSED, { slideCount: parseResult.slides.length });
+
     // Extract filename
     const fileName = filePath.split('/').pop().replace('.pptx', '') || 'Imported Deck';
 
-    // Create deck in DB
+    // Create deck in DB (get deckId first)
     const deckResult = await window.electronAPI.dbQuery(
       'INSERT INTO decks (name, file_path) VALUES (?, ?)',
       [fileName, filePath]
@@ -35,6 +45,21 @@ export async function importDeckFromPPTX(filePath) {
 
     const deckId = deckResult.data.lastInsertRowid;
 
+    // Copy PPTX to app storage
+    const copyResult = await window.electronAPI.copyPPTXToStorage(filePath, deckId);
+    if (copyResult.success) {
+      // Update DB with storage path
+      await window.electronAPI.dbQuery(
+        'UPDATE decks SET file_path = ? WHERE id = ?',
+        [copyResult.destinationPath, deckId]
+      );
+      eventBus.emit(EVENTS.COURSE_SAVED, { courseId: deckId, path: copyResult.destinationPath });
+    } else {
+      // Continue even if copy fails (using original path)
+      console.warn('Failed to copy PPTX to storage, using original path:', copyResult.error);
+      eventBus.emit(EVENTS.COURSE_SAVED, { courseId: deckId, path: filePath });
+    }
+
     // Save slides
     for (const slide of parseResult.slides) {
       await window.electronAPI.dbQuery(
@@ -43,13 +68,31 @@ export async function importDeckFromPPTX(filePath) {
       );
     }
 
-    // Build study pack and generate questions
+    // Emit DB updated event
+    eventBus.emit(EVENTS.COURSE_DB_UPDATED, { courseId: deckId });
+
+    // Build study pack (includes LLM-based course brain building)
+    // Progress events are emitted inside buildStudyPack
     await buildStudyPack(deckId);
+    
+    // Generate question bank
+    eventBus.emit(EVENTS.COURSE_BRAIN_BUILD_PROGRESS, { pct: 90 });
     await generateQuestionBank(deckId, 30);
+
+    // Emit brain ready event
+    eventBus.emit(EVENTS.COURSE_BRAIN_READY);
+
+    // Set as active course
+    await setActiveCourse(deckId);
+
+    // Emit course ready event
+    eventBus.emit(EVENTS.COURSE_READY, { courseId: deckId });
+    eventBus.emit(EVENTS.ORB_STATE, 'idle');
 
     return { success: true, deckId };
   } catch (error) {
     console.error('Import deck failed:', error);
+    eventBus.emit(EVENTS.ORB_STATE, 'idle');
     return { success: false, error: error.message };
   }
 }
@@ -68,10 +111,111 @@ export async function buildStudyPack(deckId) {
 
     const slides = slidesResult.data;
 
-    // Extract outline (titles)
+    // Get settings for LLM configuration
+    const { getSettings } = await import('./appBootstrap');
+    const settings = getSettings();
+
+    // Check if Ollama is available (try to call it)
+    let useLLM = false;
+    try {
+      const ollamaCheck = await window.electronAPI.checkOllama();
+      useLLM = ollamaCheck?.available === true;
+    } catch (e) {
+      console.warn('Could not check Ollama availability, falling back to simple extraction');
+    }
+
+    if (useLLM) {
+      // Use LLM-based course brain building
+      try {
+        // 1. Build structured course outline
+        eventBus.emit(EVENTS.COURSE_BRAIN_BUILD_PROGRESS, { pct: 20 });
+        const outlineResult = await buildCourseOutline(deckId, slides, settings);
+        
+        if (outlineResult.success && outlineResult.outline?.topics) {
+          // Store outline in database
+          for (let i = 0; i < outlineResult.outline.topics.length; i++) {
+            const topic = outlineResult.outline.topics[i];
+            await window.electronAPI.dbQuery(
+              `INSERT INTO course_outline (deck_id, topic_title, subtopics, learning_objectives, topic_order)
+               VALUES (?, ?, ?, ?, ?)`,
+              [
+                deckId,
+                topic.title || '',
+                JSON.stringify(topic.subtopics || []),
+                JSON.stringify(topic.learningObjectives || []),
+                i
+              ]
+            );
+          }
+        }
+
+        // 2. Extract concepts and relationships
+        eventBus.emit(EVENTS.COURSE_BRAIN_BUILD_PROGRESS, { pct: 50 });
+        const conceptsResult = await extractConceptsAndRelationships(deckId, slides, settings);
+        
+        if (conceptsResult.success && conceptsResult.concepts?.concepts) {
+          // Store concepts in database
+          for (const concept of conceptsResult.concepts.concepts) {
+            await window.electronAPI.dbQuery(
+              `INSERT OR IGNORE INTO course_concepts (deck_id, term, definition, relationships)
+               VALUES (?, ?, ?, ?)`,
+              [
+                deckId,
+                concept.term || '',
+                concept.definition || '',
+                JSON.stringify(concept.relationships || [])
+              ]
+            );
+
+            // Also store in mastery table for tracking
+            await window.electronAPI.dbQuery(
+              `INSERT OR IGNORE INTO mastery (deck_id, slide_id, concept, mastery_level, last_practiced)
+               VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+              [deckId, null, concept.term || '']
+            );
+          }
+        }
+
+        // 3. Identify misconceptions
+        eventBus.emit(EVENTS.COURSE_BRAIN_BUILD_PROGRESS, { pct: 80 });
+        const misconceptionsResult = await identifyMisconceptions(deckId, slides, settings);
+        
+        if (misconceptionsResult.success && misconceptionsResult.misconceptions?.misconceptions) {
+          // Store misconceptions in database
+          for (const misc of misconceptionsResult.misconceptions.misconceptions) {
+            await window.electronAPI.dbQuery(
+              `INSERT INTO course_misconceptions (deck_id, topic, misconception, correction, confusing_pairs)
+               VALUES (?, ?, ?, ?, ?)`,
+              [
+                deckId,
+                misc.topic || '',
+                misc.misconception || '',
+                misc.correction || '',
+                JSON.stringify(misc.confusingPairs || [])
+              ]
+            );
+          }
+        }
+
+        eventBus.emit(EVENTS.COURSE_BRAIN_BUILD_PROGRESS, { pct: 100 });
+
+        return {
+          success: true,
+          outline: outlineResult.outline,
+          concepts: conceptsResult.concepts,
+          misconceptions: misconceptionsResult.misconceptions,
+          method: 'llm'
+        };
+      } catch (llmError) {
+        console.error('LLM-based brain building failed, falling back to simple extraction:', llmError);
+        // Fall through to simple extraction
+      }
+    }
+
+    // Fallback: Simple extraction (original method)
     const outline = slides.map(s => s.title).filter(Boolean).join('\n');
 
-    // Extract key terms (simple word extraction - in production, use NLP)
+    // Extract key terms (simple word extraction)
     const allText = slides.map(s => `${s.content} ${s.notes}`).join(' ');
     const words = allText.toLowerCase().match(/\b[a-z]{4,}\b/g) || [];
     const wordFreq = {};
@@ -99,7 +243,7 @@ export async function buildStudyPack(deckId) {
       );
     }
 
-    return { success: true, outline, keyTerms, concepts };
+    return { success: true, outline, keyTerms, concepts, method: 'simple' };
   } catch (error) {
     console.error('Build study pack failed:', error);
     return { success: false, error: error.message };
@@ -252,6 +396,18 @@ export async function deleteDeck(deckId) {
     );
     return { success: result.success };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// Set active course (imported from appBootstrap to avoid circular dependency)
+export async function setActiveCourse(courseId) {
+  try {
+    const { updateSettings } = await import('./appBootstrap');
+    updateSettings({ activeCourseId: courseId });
+    return { success: true, courseId };
+  } catch (error) {
+    console.error('Failed to set active course:', error);
     return { success: false, error: error.message };
   }
 }
