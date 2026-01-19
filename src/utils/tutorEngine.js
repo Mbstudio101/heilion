@@ -31,10 +31,17 @@ export class TutorEngine {
       switch (this.state) {
         case TUTOR_STATES.IDLE:
           // Transition to INTRO if course just ingested
-          const courseResult = await window.electronAPI.dbQuery(
-            'SELECT * FROM decks WHERE id = ?',
+          // Try courses table first, fallback to decks
+          let courseResult = await window.electronAPI.dbQuery(
+            'SELECT * FROM courses WHERE id = ?',
             [this.courseId]
           );
+          if (!courseResult.success || !courseResult.data.length) {
+            courseResult = await window.electronAPI.dbQuery(
+              'SELECT * FROM decks WHERE id = ?',
+              [this.courseId]
+            );
+          }
           if (courseResult.success && courseResult.data.length > 0) {
             this.state = TUTOR_STATES.INTRO;
             return await this.generateIntroStep();
@@ -99,8 +106,8 @@ export class TutorEngine {
     );
 
     const slidesResult = await window.electronAPI.dbQuery(
-      'SELECT COUNT(*) as count FROM slides WHERE deck_id = ?',
-      [this.courseId]
+      'SELECT COUNT(*) as count FROM slides WHERE course_id = ? OR deck_id = ?',
+      [this.courseId, this.courseId]
     );
 
     const slideCount = slidesResult.success ? slidesResult.data[0]?.count || 0 : 0;
@@ -120,11 +127,11 @@ export class TutorEngine {
     const slideResult = await window.electronAPI.dbQuery(
       `SELECT s.*, COALESCE(m.mastery_level, 0) as mastery_score
        FROM slides s
-       LEFT JOIN mastery m ON s.deck_id = m.deck_id AND s.id = m.slide_id
-       WHERE s.deck_id = ?
+       LEFT JOIN mastery m ON (s.course_id = m.course_id OR s.deck_id = m.course_id) AND s.id = m.slide_id
+       WHERE s.course_id = ? OR s.deck_id = ?
        ORDER BY COALESCE(m.mastery_level, 0) ASC, s.slide_number ASC
        LIMIT 1`,
-      [this.courseId]
+      [this.courseId, this.courseId]
     );
     
     if (slideResult.success && slideResult.data.length > 0) {
@@ -139,10 +146,10 @@ export class TutorEngine {
       };
     }
     
-    // Fallback: any slide
+    // Fallback: any slide (check both course_id and deck_id)
     const fallbackSlide = await window.electronAPI.dbQuery(
-      'SELECT * FROM slides WHERE deck_id = ? ORDER BY slide_number LIMIT 1',
-      [this.courseId]
+      'SELECT * FROM slides WHERE course_id = ? OR deck_id = ? ORDER BY slide_number LIMIT 1',
+      [this.courseId, this.courseId]
     );
       
     if (fallbackSlide.success && fallbackSlide.data.length > 0) {

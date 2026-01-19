@@ -6,6 +6,11 @@ export async function transcribe(audioFilePath, settings) {
   const useFallback = settings?.sttFallback !== false;
 
   try {
+    // Check if HuBERT + Llama 3 is enabled and available
+    if (provider === 'hubert-llama') {
+      return await hubertLlamaTranscribe(audioFilePath, settings);
+    }
+    
     if (provider === 'cloud') {
       // Check if API key exists before attempting cloud STT
       const keyResult = await window.electronAPI.getApiKey('stt');
@@ -32,29 +37,31 @@ export async function transcribe(audioFilePath, settings) {
       if (!result.success && result.needsCloud && useFallback) {
         console.warn('Whisper.cpp not available - automatically trying cloud STT fallback');
         
-        // Check if cloud STT API key exists
-        const keyResult = await window.electronAPI.getApiKey('stt');
-        if (keyResult.success && keyResult.key) {
+        // Check if OpenAI API key exists (used for Whisper API)
+        let keyResult = await window.electronAPI.getApiKey('openai');
+        if (!keyResult || !keyResult.success || !keyResult.key) {
+          keyResult = await window.electronAPI.getApiKey('stt');
+        }
+        
+        if (keyResult && keyResult.success && keyResult.key) {
           try {
             const cloudResult = await cloudSTTTranscribe(audioFilePath, settings);
             if (cloudResult.success) {
+              console.log('✓ Successfully using cloud STT as fallback');
               return cloudResult;
             }
           } catch (error) {
-            // Cloud also failed - return original error with helpful message
-            return {
-              success: false,
-              error: 'Speech-to-Text unavailable. Please install whisper.cpp or configure cloud STT in settings.',
-              suggestion: 'Install whisper.cpp: https://github.com/ggerganov/whisper.cpp or add STT API key in settings'
-            };
+            console.error('Cloud STT fallback also failed:', error);
+            // Continue to show helpful error message
           }
         }
         
-        // No cloud API key - return helpful error message
+        // No cloud API key - return silent failure (will be handled by UI)
         return {
           success: false,
-          error: 'Speech-to-Text unavailable. Please install whisper.cpp or configure cloud STT API key in settings.',
-          suggestion: 'Install whisper.cpp: https://github.com/ggerganov/whisper.cpp or add STT API key in settings'
+          error: '',
+          suggestion: '',
+          needsCloud: true
         };
       }
       
@@ -84,8 +91,8 @@ export async function localWhisperTranscribe(audioFilePath, settings) {
       if (errorMsg.includes('not found') || errorMsg.includes('ENOENT')) {
         return { 
           success: false, 
-          error: 'Whisper.cpp not installed. Please install whisper.cpp or use cloud STT.',
-          suggestion: 'Install whisper.cpp: https://github.com/ggerganov/whisper.cpp',
+          error: '',
+          suggestion: '',
           needsCloud: true
         };
       }
@@ -101,20 +108,85 @@ export async function localWhisperTranscribe(audioFilePath, settings) {
   }
 }
 
+export async function hubertLlamaTranscribe(audioFilePath, settings) {
+  try {
+    // Check if HuBERT + Llama 3 service is available
+    if (!window.electronAPI.checkHubertLlama) {
+      return {
+        success: false,
+        error: 'HuBERT + Llama 3 integration not available',
+        suggestion: 'This feature requires the HuBERT + Llama 3 sidecar service'
+      };
+    }
+    
+    const availability = await window.electronAPI.checkHubertLlama();
+    if (!availability || !availability.available) {
+      return {
+        success: false,
+        error: 'HuBERT + Llama 3 service is not running',
+        suggestion: 'Please start the HuBERT + Llama 3 service or use another STT provider'
+      };
+    }
+    
+    // Build context from course/conversation if available
+    let context = '';
+    if (settings?.activeCourseId) {
+      context = `Student is working on course ID: ${settings.activeCourseId}. `;
+    }
+    if (settings?.selectedPersona) {
+      context += `Tutor persona: ${settings.selectedPersona}. `;
+    }
+    if (settings?.difficulty) {
+      context += `Difficulty level: ${settings.difficulty}. `;
+    }
+    
+    // Call HuBERT + Llama 3 service
+    const result = await window.electronAPI.transcribeWithHubertLlama(audioFilePath, context);
+    
+    if (result.success) {
+      // HuBERT+Llama returns both transcript and response
+      // For STT, we primarily need the transcript
+      return { 
+        success: true, 
+        transcript: result.transcript || result.response || '',
+        // Also include full response for advanced use cases
+        fullResponse: result.response 
+      };
+    } else {
+      return { 
+        success: false, 
+        error: result.error || 'HuBERT + Llama 3 transcription failed' 
+      };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 export async function cloudSTTTranscribe(audioFilePath, settings) {
   try {
-    // Get API key
-    const keyResult = await window.electronAPI.getApiKey('stt');
-    if (!keyResult.success || !keyResult.key) {
-      throw new Error('STT API key not found');
+    // OpenAI Whisper API uses the same API key as OpenAI's other services
+    // Try 'openai' first, then fall back to 'stt' for backward compatibility
+    let keyResult = await window.electronAPI.getApiKey('openai');
+    if (!keyResult || !keyResult.success || !keyResult.key) {
+      keyResult = await window.electronAPI.getApiKey('stt');
+    }
+    
+    if (!keyResult || !keyResult.success || !keyResult.key) {
+      throw new Error('OpenAI API key not found. Please add your OpenAI API key in Settings (API Keys section).');
     }
 
-    // Read audio file and convert to base64 or form data
-    // For now, placeholder - would need to read file in main process
-    // In production, use OpenAI Whisper API or Google Speech-to-Text
+    const apiKey = keyResult.key;
+
+    // Read audio file and send to OpenAI Whisper API
+    // Use the main process to read the file (renderer can't access file system directly)
+    const result = await window.electronAPI.transcribeWithOpenAI(audioFilePath, apiKey);
     
-    // Placeholder implementation
-    throw new Error('Cloud STT not yet implemented - use OpenAI Whisper API or Google STT');
+    if (result.success) {
+      return { success: true, transcript: result.transcript };
+    } else {
+      return { success: false, error: result.error || 'OpenAI Whisper API transcription failed' };
+    }
   } catch (error) {
     return { success: false, error: error.message };
   }

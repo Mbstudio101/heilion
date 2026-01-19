@@ -5,14 +5,16 @@ const fs = require('fs');
 const WebSocket = require('ws');
 
 let wakeWordProcess = null;
-let wakeWordServer = null;
-let wakeWordClients = new Set();
 
 let sopranoProcess = null;
 const sopranoPort = 8001;
 
 let kokoroProcess = null;
 const kokoroPort = 8880;
+
+let hubertLlamaProcess = null;
+let hubertLlamaWebSocket = null;
+const hubertLlamaPort = 8766;
 
 // Wake Word Sidecar
 function startWakeWordSidecar() {
@@ -21,16 +23,6 @@ function startWakeWordSidecar() {
   if (!fs.existsSync(sidecarPath)) {
     console.log('Wake word sidecar not found, will use push-to-talk mode');
     return false;
-  }
-  
-  // Close existing server if it exists
-  if (wakeWordServer) {
-    try {
-      wakeWordServer.close();
-      wakeWordServer = null;
-    } catch (e) {
-      // Ignore errors when closing
-    }
   }
   
   // Kill existing process if it exists
@@ -44,33 +36,7 @@ function startWakeWordSidecar() {
   }
   
   try {
-    // Start WebSocket server first (check if port is available)
-    try {
-      wakeWordServer = new WebSocket.Server({ port: 8765 });
-      wakeWordServer.on('connection', (ws) => {
-        wakeWordClients.add(ws);
-        ws.on('close', () => {
-          wakeWordClients.delete(ws);
-        });
-      });
-      wakeWordServer.on('error', (error) => {
-        if (error.code === 'EADDRINUSE') {
-          console.log('Port 8765 already in use - wake word service may already be running');
-          wakeWordServer = null;
-        } else {
-          console.error('Wake word WebSocket server error:', error);
-        }
-      });
-      console.log('Wake word WebSocket server started on port 8765');
-    } catch (serverError) {
-      if (serverError.code === 'EADDRINUSE') {
-        console.log('Port 8765 already in use - reusing existing server');
-      } else {
-        throw serverError;
-      }
-    }
-    
-    // Start Python sidecar process
+    // Start Python sidecar process (it will create its own WebSocket server on port 8765)
     wakeWordProcess = spawn('python3', [sidecarPath], {
       cwd: path.join(__dirname, '..', 'wake-word-sidecar')
     });
@@ -91,14 +57,6 @@ function startWakeWordSidecar() {
     return true;
   } catch (error) {
     console.error('Failed to start wake word sidecar:', error);
-    if (wakeWordServer) {
-      try {
-        wakeWordServer.close();
-        wakeWordServer = null;
-      } catch (e) {
-        // Ignore errors
-      }
-    }
     return false;
   }
 }
@@ -112,24 +70,12 @@ function stopWakeWordSidecar() {
     }
     wakeWordProcess = null;
   }
-  if (wakeWordServer) {
-    try {
-      wakeWordServer.close(() => {
-        wakeWordServer = null;
-      });
-    } catch (e) {
-      wakeWordServer = null;
-    }
-  }
-  wakeWordClients.clear();
 }
 
+// Audio streaming is handled directly by the Python wake word service via PyAudio
+// No need for streamAudioToWake - the Python service captures audio directly
 function streamAudioToWake(audioData) {
-  wakeWordClients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(audioData);
-    }
-  });
+  // No-op: Python service handles audio capture directly via PyAudio
 }
 
 // Soprano TTS Sidecar
@@ -286,6 +232,215 @@ function getKokoroPort() {
   return kokoroPort;
 }
 
+// HuBERT + Llama 3 Sidecar
+function startHubertLlamaSidecar() {
+  const sidecarPath = path.join(__dirname, '..', 'hubert-llama-sidecar', 'hubert_llama_service.py');
+  
+  if (!fs.existsSync(sidecarPath)) {
+    console.log('HuBERT + Llama 3 sidecar not found');
+    return false;
+  }
+  
+  // Kill existing process if it exists
+  if (hubertLlamaProcess) {
+    try {
+      hubertLlamaProcess.kill();
+      hubertLlamaProcess = null;
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+  
+  // Close existing WebSocket connection
+  if (hubertLlamaWebSocket) {
+    try {
+      hubertLlamaWebSocket.close();
+      hubertLlamaWebSocket = null;
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+  
+  try {
+    // Start Python sidecar process
+    hubertLlamaProcess = spawn('python3', [sidecarPath, hubertLlamaPort.toString()], {
+      cwd: path.join(__dirname, '..', 'hubert-llama-sidecar'),
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1'
+      }
+    });
+    
+    hubertLlamaProcess.stdout.on('data', (data) => {
+      console.log(`HuBERT+Llama sidecar: ${data}`);
+    });
+    
+    hubertLlamaProcess.stderr.on('data', (data) => {
+      console.error(`HuBERT+Llama sidecar error: ${data}`);
+    });
+    
+    hubertLlamaProcess.on('close', (code) => {
+      console.log(`HuBERT+Llama sidecar exited with code ${code}`);
+      hubertLlamaProcess = null;
+      hubertLlamaWebSocket = null;
+    });
+    
+    // Connect to WebSocket after a short delay
+    setTimeout(() => {
+      connectHubertLlamaWebSocket();
+    }, 2000);
+    
+    return true;
+  } catch (error) {
+    console.error('Failed to start HuBERT + Llama 3 sidecar:', error);
+    return false;
+  }
+}
+
+function connectHubertLlamaWebSocket() {
+  if (hubertLlamaWebSocket && hubertLlamaWebSocket.readyState === WebSocket.OPEN) {
+    return;
+  }
+  
+  try {
+    hubertLlamaWebSocket = new WebSocket(`ws://localhost:${hubertLlamaPort}`);
+    
+    hubertLlamaWebSocket.on('open', () => {
+      console.log('Connected to HuBERT + Llama 3 service');
+      // Request models to be loaded
+      hubertLlamaWebSocket.send(JSON.stringify({ type: 'load_models' }));
+    });
+    
+    hubertLlamaWebSocket.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        console.log('HuBERT+Llama message:', message.type);
+      } catch (e) {
+        // Ignore parse errors
+      }
+    });
+    
+    hubertLlamaWebSocket.on('error', (error) => {
+      console.error('HuBERT+Llama WebSocket error:', error);
+    });
+    
+    hubertLlamaWebSocket.on('close', () => {
+      console.log('Disconnected from HuBERT + Llama 3 service');
+      hubertLlamaWebSocket = null;
+      // Try to reconnect after delay
+      setTimeout(connectHubertLlamaWebSocket, 5000);
+    });
+  } catch (error) {
+    console.error('Failed to connect to HuBERT + Llama 3 service:', error);
+  }
+}
+
+function stopHubertLlamaSidecar() {
+  if (hubertLlamaWebSocket) {
+    try {
+      hubertLlamaWebSocket.close();
+      hubertLlamaWebSocket = null;
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+  
+  if (hubertLlamaProcess) {
+    try {
+      hubertLlamaProcess.kill();
+      hubertLlamaProcess = null;
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+}
+
+async function transcribeWithHubertLlama(audioPath, context = '') {
+  return new Promise((resolve, reject) => {
+    if (!hubertLlamaWebSocket || hubertLlamaWebSocket.readyState !== WebSocket.OPEN) {
+      // Try to connect
+      connectHubertLlamaWebSocket();
+      setTimeout(() => {
+        if (!hubertLlamaWebSocket || hubertLlamaWebSocket.readyState !== WebSocket.OPEN) {
+          resolve({
+            success: false,
+            error: 'HuBERT + Llama 3 service not available'
+          });
+          return;
+        }
+        sendTranscribeRequest(audioPath, context, resolve, reject);
+      }, 1000);
+    } else {
+      sendTranscribeRequest(audioPath, context, resolve, reject);
+    }
+  });
+}
+
+function sendTranscribeRequest(audioPath, context, resolve, reject) {
+  const messageHandler = (data) => {
+    try {
+      const response = JSON.parse(data.toString());
+      if (response.type === 'result' || response.type === 'error') {
+        hubertLlamaWebSocket.removeListener('message', messageHandler);
+        if (response.type === 'error') {
+          resolve({
+            success: false,
+            error: response.error
+          });
+        } else {
+          resolve(response);
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  };
+  
+  hubertLlamaWebSocket.on('message', messageHandler);
+  
+  // Send transcribe request
+  hubertLlamaWebSocket.send(JSON.stringify({
+    type: 'transcribe',
+    audio_path: audioPath,
+    context: context
+  }));
+  
+  // Timeout after 60 seconds
+  setTimeout(() => {
+    hubertLlamaWebSocket.removeListener('message', messageHandler);
+    resolve({
+      success: false,
+      error: 'HuBERT + Llama 3 transcription timeout'
+    });
+  }, 60000);
+}
+
+async function checkHubertLlamaAvailable() {
+  // Check if service is running
+  return new Promise((resolve) => {
+    if (hubertLlamaWebSocket && hubertLlamaWebSocket.readyState === WebSocket.OPEN) {
+      resolve({ available: true, connected: true });
+      return;
+    }
+    
+    // Try to connect to check
+    const testWs = new WebSocket(`ws://localhost:${hubertLlamaPort}`);
+    
+    testWs.on('open', () => {
+      testWs.close();
+      resolve({ available: true, connected: false });
+    });
+    
+    testWs.on('error', () => {
+      resolve({ available: false, connected: false });
+    });
+    
+    setTimeout(() => {
+      resolve({ available: false, connected: false });
+    }, 2000);
+  });
+}
+
 module.exports = {
   startWakeWordSidecar,
   stopWakeWordSidecar,
@@ -295,5 +450,9 @@ module.exports = {
   getSopranoPort,
   startKokoroSidecar,
   stopKokoroSidecar,
-  getKokoroPort
+  getKokoroPort,
+  startHubertLlamaSidecar,
+  stopHubertLlamaSidecar,
+  transcribeWithHubertLlama,
+  checkHubertLlamaAvailable
 };

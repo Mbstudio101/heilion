@@ -29,7 +29,11 @@ const {
   getSopranoPort,
   startKokoroSidecar,
   stopKokoroSidecar,
-  getKokoroPort
+  getKokoroPort,
+  startHubertLlamaSidecar,
+  stopHubertLlamaSidecar,
+  transcribeWithHubertLlama,
+  checkHubertLlamaAvailable
 } = require('./main/sidecarManager');
 const { 
   checkWhisperAvailable, 
@@ -261,6 +265,17 @@ app.whenReady().then(async () => {
     console.error('✗ Kokoro TTS sidecar check failed:', error);
   }
 
+  // Start HuBERT + Llama 3 sidecar (optional, only if configured)
+  let hubertLlamaAvailable = false;
+  try {
+    // Only start if user has explicitly enabled it (check settings or environment)
+    // For now, we'll make it opt-in via settings
+    hubertLlamaAvailable = false; // Will be enabled when user configures it
+    // hubertLlamaAvailable = startHubertLlamaSidecar();
+  } catch (error) {
+    console.error('✗ HuBERT + Llama 3 sidecar startup failed:', error);
+  }
+
   // Create main window regardless of sidecar status
   let mainWindow;
   try {
@@ -334,7 +349,119 @@ ipcMain.handle('db-query', (event, query, params = []) => {
   return queryDatabase(query, params);
 });
 
-// File operations
+// Shared course import logic
+async function importCourseFromPath(sourcePath) {
+  const { parsePPTXFromPath } = require('./main/pptxParserMain');
+  
+  try {
+    // 1. Extract filename
+    const fileName = path.basename(sourcePath, '.pptx') || 'Imported Course';
+    
+    // 2. Create course record first (get courseId)
+    // Try courses table first, fallback to decks for compatibility
+    let courseResult = queryDatabase(
+      'INSERT INTO courses (name, file_path) VALUES (?, ?)',
+      [fileName, sourcePath]
+    );
+    
+    let usedDecksTable = false;
+    // Fallback to decks table if courses insert failed
+    if (!courseResult.success) {
+      courseResult = queryDatabase(
+        'INSERT INTO decks (name, file_path) VALUES (?, ?)',
+        [fileName, sourcePath]
+      );
+      usedDecksTable = courseResult.success;
+    }
+    
+    if (!courseResult.success) {
+      return { success: false, error: `Failed to create course record: ${courseResult.error}` };
+    }
+    
+    const courseId = courseResult.data?.lastInsertRowid;
+    if (!courseId) {
+      return { success: false, error: 'Failed to get course ID from database' };
+    }
+    
+    // 3. Copy PPTX to app storage
+    const appDataPath = app.getPath('userData');
+    const coursesDir = path.join(appDataPath, 'Courses', courseId.toString());
+    
+    if (!fs.existsSync(coursesDir)) {
+      fs.mkdirSync(coursesDir, { recursive: true });
+    }
+    
+    const storedPath = path.join(coursesDir, 'source.pptx');
+    fs.copyFileSync(sourcePath, storedPath);
+    
+    // Update DB with stored path (try courses first, fallback to decks)
+    let updateResult = queryDatabase(
+      'UPDATE courses SET file_path = ? WHERE id = ?',
+      [storedPath, courseId]
+    );
+    if (!updateResult.success) {
+      updateResult = queryDatabase(
+        'UPDATE decks SET file_path = ? WHERE id = ?',
+        [storedPath, courseId]
+      );
+    }
+    
+    // 4. Parse PPTX from disk (in main process)
+    const parseResult = await parsePPTXFromPath(storedPath);
+    
+    if (!parseResult.success) {
+      return { success: false, error: parseResult.error };
+    }
+    
+    const slides = parseResult.slides;
+    
+    // 5. Save slides to database (FTS triggers will auto-populate)
+    for (const slide of slides) {
+      let slideResult;
+      
+      if (usedDecksTable) {
+        // Course was created in decks table, so use deck_id
+        slideResult = queryDatabase(
+          'INSERT INTO slides (deck_id, slide_number, title, content, notes) VALUES (?, ?, ?, ?, ?)',
+          [courseId, slide.slideNumber, slide.title, slide.content, slide.notes]
+        );
+      } else {
+        // Course was created in courses table, try both for compatibility
+        slideResult = queryDatabase(
+          'INSERT INTO slides (course_id, deck_id, slide_number, title, content, notes) VALUES (?, ?, ?, ?, ?, ?)',
+          [courseId, courseId, slide.slideNumber, slide.title, slide.content, slide.notes]
+        );
+        
+        if (!slideResult.success) {
+          slideResult = queryDatabase(
+            'INSERT INTO slides (course_id, slide_number, title, content, notes) VALUES (?, ?, ?, ?, ?)',
+            [courseId, slide.slideNumber, slide.title, slide.content, slide.notes]
+          );
+        }
+      }
+    }
+    
+    // 6. FTS index is automatically built by triggers
+    
+    // Return metadata only (no large file data)
+    return {
+      success: true,
+      courseId,
+      storedPath,
+      slideCount: slides.length
+    };
+  } catch (error) {
+    console.error('Course import failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// PATCH 1: New course import handler - parses in main process, no large IPC transfer
+ipcMain.handle('course:importPptxFromPath', async (event, sourcePath) => {
+  return await importCourseFromPath(sourcePath);
+});
+
+// File operations - Legacy handler (for compatibility, redirects to new handler)
 ipcMain.handle('import-pptx', async (event) => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
@@ -346,11 +473,26 @@ ipcMain.handle('import-pptx', async (event) => {
   }
 
   const filePath = result.filePaths[0];
+  // Use shared import logic
+  return await importCourseFromPath(filePath);
+});
+
+// PATCH 4: Slide retrieval handler
+ipcMain.handle('course:searchRelevantSlides', async (event, courseId, query, limit = 5) => {
+  const { searchRelevantSlides, buildSlideContext } = require('./main/retrieval');
+  
   try {
-    const fileData = fs.readFileSync(filePath);
-    return { success: true, filePath, fileData: fileData.buffer };
+    const slides = searchRelevantSlides(courseId, query, limit);
+    const context = buildSlideContext(courseId, query, limit);
+    
+    return {
+      success: true,
+      slides,
+      context
+    };
   } catch (error) {
-    return { success: false, error: error.message };
+    console.error('Slide retrieval failed:', error);
+    return { success: false, error: error.message, slides: [], context: '' };
   }
 });
 
@@ -441,6 +583,81 @@ ipcMain.handle('run-whisper', async (event, audioPath, modelName = null) => {
   // Use the whisper handler module which gracefully handles missing whisper.cpp
   // modelName can be 'base.en', 'small.en', 'tiny.en', 'medium.en', etc.
   return await runWhisperTranscription(audioPath, modelName);
+});
+
+// HuBERT + Llama 3 transcription (Custom multimodal speech understanding)
+ipcMain.handle('transcribe-with-hubert-llama', async (event, audioPath, context = '') => {
+  try {
+    const result = await transcribeWithHubertLlama(audioPath, context);
+    return result;
+  } catch (error) {
+    console.error('HuBERT + Llama 3 transcription error:', error);
+    return {
+      success: false,
+      error: error.message || 'HuBERT + Llama 3 transcription failed'
+    };
+  }
+});
+
+ipcMain.handle('check-hubert-llama', async () => {
+  return await checkHubertLlamaAvailable();
+});
+
+// OpenAI Whisper API transcription (Robust Speech Recognition via Large-Scale Weak Supervision)
+ipcMain.handle('transcribe-with-openai', async (event, audioPath, apiKey) => {
+  const axios = require('axios');
+  const FormData = require('form-data');
+  
+  try {
+    // Read audio file
+    const audioData = fs.readFileSync(audioPath);
+    
+    // Create form data for OpenAI Whisper API
+    const form = new FormData();
+    form.append('file', audioData, {
+      filename: path.basename(audioPath),
+      contentType: 'audio/wav' // or detect from extension
+    });
+    form.append('model', 'whisper-1'); // OpenAI Whisper model
+    form.append('language', 'en'); // Optional: specify language for better accuracy
+    
+    // Call OpenAI Whisper API
+    const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', form, {
+      headers: {
+        ...form.getHeaders(),
+        'Authorization': `Bearer ${apiKey}`
+      },
+      timeout: 30000 // 30 second timeout
+    });
+    
+    if (response.data && response.data.text) {
+      return { success: true, transcript: response.data.text.trim() };
+    } else {
+      return { success: false, error: 'OpenAI API returned empty response' };
+    }
+  } catch (error) {
+    console.error('OpenAI Whisper API error:', error);
+    
+    if (error.response) {
+      // API error response
+      const errorMessage = error.response.data?.error?.message || error.response.statusText;
+      return { 
+        success: false, 
+        error: `OpenAI API error: ${errorMessage}`,
+        statusCode: error.response.status
+      };
+    } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      return { 
+        success: false, 
+        error: 'Cannot connect to OpenAI API. Please check your internet connection.' 
+      };
+    } else {
+      return { 
+        success: false, 
+        error: error.message || 'OpenAI Whisper API transcription failed' 
+      };
+    }
+  }
 });
 
 // TTS operations

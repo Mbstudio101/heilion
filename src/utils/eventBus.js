@@ -80,13 +80,14 @@ export const EVENTS = {
   QUESTION_ASKED: 'QUESTION_ASKED',
   ANSWER_SUBMITTED: 'ANSWER_SUBMITTED',
   ORB_STATE_CHANGED: 'ORB_STATE_CHANGED',
-  // Course import events
-  COURSE_IMPORT_STARTED: 'COURSE_IMPORT_STARTED',
-  COURSE_SAVED: 'COURSE_SAVED',
-  PPTX_PARSED: 'PPTX_PARSED',
-  COURSE_DB_UPDATED: 'COURSE_DB_UPDATED',
-  COURSE_BRAIN_BUILD_STARTED: 'COURSE_BRAIN_BUILD_STARTED',
-  COURSE_BRAIN_BUILD_PROGRESS: 'COURSE_BRAIN_BUILD_PROGRESS',
-  COURSE_BRAIN_READY: 'COURSE_BRAIN_READY',
-  COURSE_READY: 'COURSE_READY'
+  // Course import events (ordered sequence)
+  COURSE_IMPORT_STARTED: 'COURSE_IMPORT_STARTED',        // 1. User drops/selects PPTX
+  COURSE_SAVED: 'COURSE_SAVED',                          // 2. PPTX copied to storage
+  PPTX_PARSED: 'PPTX_PARSED',                            // 3. Slides extracted
+  COURSE_DB_UPDATED: 'COURSE_DB_UPDATED',                // 4. Slides saved to DB
+  COURSE_INDEX_BUILT: 'COURSE_INDEX_BUILT',              // 5. FTS index populated
+  COURSE_BRAIN_BUILD_STARTED: 'COURSE_BRAIN_BUILD_STARTED', // 6. Brain build begins
+  COURSE_BRAIN_BUILD_PROGRESS: 'COURSE_BRAIN_BUILD_PROGRESS', // 7. Progress updates
+  COURSE_BRAIN_READY: 'COURSE_BRAIN_READY',              // 8. Brain build complete
+  COURSE_READY: 'COURSE_READY'                           // 9. Course fully ready
 };

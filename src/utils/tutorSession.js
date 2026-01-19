@@ -32,86 +32,23 @@ export function getPersonaPrompt(persona, teacherStyle = true, difficulty = 'med
   return `${basePrompt} ${styleModifier} ${difficultyModifier}`;
 }
 
-// Build grounded prompt with relevant course content (RAG-style retrieval)
+// PATCH 4: Use FTS-based retrieval from courseManager
+import { buildGroundedPrompt as buildGroundedPromptFromManager } from './courseManager';
+
+// Re-export for compatibility
 async function buildGroundedPrompt(userQuestion, courseId) {
-  if (!courseId) return '';
-  
-  try {
-    // Retrieve relevant slides (keyword matching)
-    const slidesResult = await window.electronAPI.dbQuery(
-      `SELECT * FROM slides WHERE deck_id = ? 
-       ORDER BY slide_number`,
-      [courseId]
-    );
-    
-    if (!slidesResult.success || !slidesResult.data) return '';
-    
-    const slides = slidesResult.data;
-    const questionLower = userQuestion.toLowerCase();
-    
-    // Find relevant slides (simple keyword matching - can be improved with semantic search)
-    const relevantSlides = slides.filter(slide => {
-      const title = (slide.title || '').toLowerCase();
-      const content = (slide.content || '').toLowerCase();
-      const notes = (slide.notes || '').toLowerCase();
-      
-      // Check if any words from question appear in slide
-      const questionWords = questionLower.split(/\s+/).filter(w => w.length > 3);
-      return questionWords.some(word => 
-        title.includes(word) || content.includes(word) || notes.includes(word)
-      );
-    }).slice(0, 5); // Limit to 5 most relevant
-    
-    // Retrieve relevant concepts from mastery table
-    const conceptsResult = await window.electronAPI.dbQuery(
-      `SELECT DISTINCT concept FROM mastery WHERE deck_id = ?`,
-      [courseId]
-    );
-    
-    const relevantConcepts = [];
-    if (conceptsResult.success && conceptsResult.data) {
-      conceptsResult.data.forEach(c => {
-        const conceptLower = (c.concept || '').toLowerCase();
-        if (questionLower.includes(conceptLower) || conceptLower.includes(questionLower.split(' ')[0])) {
-          relevantConcepts.push(c.concept);
-        }
-      });
-    }
-    
-    // Build context string
-    let context = '';
-    
-    if (relevantSlides.length > 0) {
-      context += '\n\nRelevant Course Content:\n';
-      relevantSlides.forEach((slide, idx) => {
-        context += `\nSlide ${slide.slide_number} - ${slide.title || 'Untitled'}:\n`;
-        context += `${(slide.content || '').substring(0, 200)}${slide.content && slide.content.length > 200 ? '...' : ''}\n`;
-        if (slide.notes) {
-          context += `Notes: ${slide.notes.substring(0, 150)}${slide.notes.length > 150 ? '...' : ''}\n`;
-        }
-      });
-    }
-    
-    if (relevantConcepts.length > 0) {
-      context += `\n\nKey Concepts Mentioned: ${relevantConcepts.join(', ')}\n`;
-    }
-    
-    return context;
-  } catch (error) {
-    console.error('Failed to build grounded prompt:', error);
-    return '';
-  }
+  return await buildGroundedPromptFromManager(userQuestion, courseId);
 }
 
-export async function gradeAnswer(deckContext, question, transcriptText, personaConfig) {
+export async function gradeAnswer(courseContext, question, transcriptText, personaConfig) {
   const persona = personaConfig?.persona || 'Virgo';
   const personaPrompt = getPersonaPrompt(persona, true, personaConfig?.difficulty || 'medium');
   const llmProvider = personaConfig?.llmProvider || 'local';
   const settings = personaConfig;
   
-  // Retrieve relevant course content for grounded prompt
-  const courseId = deckContext?.id || personaConfig?.activeCourseId;
-  const courseContext = await buildGroundedPrompt(question.question_text || transcriptText, courseId);
+  // PATCH 4: Retrieve relevant course content using FTS
+  const courseId = courseContext?.id || personaConfig?.activeCourseId;
+  const slideContext = await buildGroundedPrompt(question.question_text || transcriptText, courseId);
   
   const gradingPrompt = `${personaPrompt}
 
@@ -122,7 +59,7 @@ The correct answer should cover: ${question.correct_answer || question.idealAnsw
 
 Student's answer (transcript): ${transcriptText}
 
-${deckContext ? `Course: "${deckContext.name}"` : ''}${courseContext}
+${courseContext ? `Course: "${courseContext.name}"` : ''}${slideContext}
 
 Grade this answer and provide a JSON response with EXACTLY these fields:
 {
@@ -239,7 +176,7 @@ export async function selectNextQuestion(sessionId) {
       return { success: false, error: 'Session not found' };
     }
 
-    const question = await getNextQuestion(session.deckId, null);
+    const question = await getNextQuestion(session.deckId, null); // deckId is actually courseId
     if (question) {
       session.currentQuestionId = question.id;
       return { success: true, question };
@@ -304,13 +241,24 @@ export async function submitAnswer(sessionId, questionId, transcriptText) {
 
     const question = questionResult.data[0];
 
-    // Get deck for context
-    const deckResult = await window.electronAPI.dbQuery(
-      'SELECT * FROM decks WHERE id = ?',
+    // Get course for context (try courses table first, fallback to decks)
+    const courseResult = await window.electronAPI.dbQuery(
+      'SELECT * FROM courses WHERE id = ?',
       [session.deckId]
     );
-
-    const deckContext = deckResult.success ? deckResult.data[0] : null;
+    
+    let courseContext = courseResult.success && courseResult.data.length > 0 
+      ? courseResult.data[0] 
+      : null;
+    
+    // Fallback to legacy decks table
+    if (!courseContext) {
+      const deckResult = await window.electronAPI.dbQuery(
+        'SELECT * FROM decks WHERE id = ?',
+        [session.deckId]
+      );
+      courseContext = deckResult.success ? deckResult.data[0] : null;
+    }
 
     // Get persona config
     const settings = JSON.parse(localStorage.getItem('heilion-settings') || '{}');
@@ -318,7 +266,7 @@ export async function submitAnswer(sessionId, questionId, transcriptText) {
 
     // Grade answer
     const gradeResult = await gradeAnswer(
-      deckContext,
+      courseContext,
       question,
       transcriptText,
       { persona, difficulty: settings.difficulty || 'medium', ...settings }
@@ -368,9 +316,27 @@ export async function endSession(sessionId) {
   return { success: false, error: 'Session not found' };
 }
 
-export async function getNextQuestion(deckId, userId) {
-  // Get questions with mastery levels
+export async function getNextQuestion(courseId, userId) {
+  // Try course_questions table first (new schema)
   const masteryResult = await window.electronAPI.dbQuery(
+    `SELECT q.id, q.question_text, q.correct_answer, 
+            COALESCE(SUM(a.score), 0) / COUNT(a.id) as avg_score,
+            COUNT(a.id) as attempt_count
+     FROM course_questions q
+     LEFT JOIN attempts a ON q.id = a.question_id
+     WHERE q.course_id = ?
+     GROUP BY q.id
+     ORDER BY avg_score ASC, attempt_count ASC
+     LIMIT 1`,
+    [courseId]
+  );
+  
+  if (masteryResult.success && masteryResult.data.length > 0) {
+    return masteryResult.data[0];
+  }
+  
+  // Fallback: try legacy questions table
+  const legacyResult = await window.electronAPI.dbQuery(
     `SELECT q.id, q.question_text, q.correct_answer, 
             COALESCE(SUM(a.score), 0) / COUNT(a.id) as avg_score,
             COUNT(a.id) as attempt_count
@@ -380,22 +346,28 @@ export async function getNextQuestion(deckId, userId) {
      GROUP BY q.id
      ORDER BY avg_score ASC, attempt_count ASC
      LIMIT 1`,
-    [deckId]
+    [courseId]
   );
   
-  if (masteryResult.success && masteryResult.data.length > 0) {
-    return masteryResult.data[0];
+  if (legacyResult.success && legacyResult.data.length > 0) {
+    return legacyResult.data[0];
   }
   
-  // Fallback: get any question
+  // Final fallback: get any question
   const fallbackResult = await window.electronAPI.dbQuery(
-    'SELECT * FROM questions WHERE deck_id = ? LIMIT 1',
-    [deckId]
+    'SELECT * FROM course_questions WHERE course_id = ? LIMIT 1',
+    [courseId]
   );
   
   if (fallbackResult.success && fallbackResult.data.length > 0) {
     return fallbackResult.data[0];
   }
+  
+  // Legacy fallback
+  const legacyFallback = await window.electronAPI.dbQuery(
+    'SELECT * FROM questions WHERE deck_id = ? LIMIT 1',
+    [courseId]
+  );
   
   return null;
 }
@@ -417,14 +389,14 @@ export async function saveAttempt(questionId, userAnswer, transcript, gradeResul
   );
 }
 
-export async function updateMastery(deckId, slideId, concept, score) {
+export async function updateMastery(courseId, slideId, concept, score) {
   const masteryLevel = score / 100; // Normalize to 0-1
   
   return await window.electronAPI.dbQuery(
-    `INSERT INTO mastery (deck_id, slide_id, concept, mastery_level, last_practiced)
+    `INSERT INTO mastery (course_id, slide_id, concept, mastery_level, last_practiced)
      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(deck_id, slide_id, concept) 
+     ON CONFLICT(course_id, slide_id, concept) 
      DO UPDATE SET mastery_level = (mastery_level + ?) / 2, last_practiced = CURRENT_TIMESTAMP`,
-    [deckId, slideId, concept || 'general', masteryLevel, masteryLevel]
+    [courseId, slideId, concept || 'general', masteryLevel, masteryLevel]
   );
 }

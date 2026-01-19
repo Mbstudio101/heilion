@@ -23,7 +23,8 @@ export async function healthCheckAll() {
     checkFFmpeg(),
     checkWakeService(),
     checkCloudKeys(),
-    checkInternet()
+    checkInternet(),
+    checkHubertLlama()
   ]);
   
   // Get detailed ffmpeg status (includes path)
@@ -36,7 +37,8 @@ export async function healthCheckAll() {
     ffmpegPath: ffmpegStatus.path,
     wakeServiceReady: checks[3],
     cloudKeysPresent: checks[4],
-    internetAvailable: checks[5]
+    internetAvailable: checks[5],
+    hubertLlamaAvailable: checks[6]
   };
 }
 
@@ -105,6 +107,18 @@ async function checkFFmpeg() {
   try {
     const result = await window.electronAPI.checkFFmpeg();
     return result.available;
+  } catch {
+    return false;
+  }
+}
+
+async function checkHubertLlama() {
+  try {
+    if (!window.electronAPI.checkHubertLlama) {
+      return false;
+    }
+    const result = await window.electronAPI.checkHubertLlama();
+    return result && result.available;
   } catch {
     return false;
   }

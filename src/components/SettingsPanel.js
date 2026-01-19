@@ -13,7 +13,7 @@ const checkForUpdatesManually = async () => {
   }
   return { success: false, error: 'Update API not available' };
 };
-import { getDeckLibrary, deleteDeck } from '../utils/deckManager';
+import { getCourseLibrary, deleteCourse } from '../utils/courseManager';
 import { getAvailableLanguages, getAvailableVoices, listTTSProviders, listVoices, setVoiceSelection, testVoice } from '../utils/ttsManager';
 import './SettingsPanel.css';
 
@@ -228,9 +228,9 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
 
   const loadCourses = async () => {
     try {
-      const result = await getDeckLibrary();
+      const result = await getCourseLibrary();
       if (result.success) {
-        setCourses(result.decks || []);
+        setCourses(result.courses || result.decks || []);
       }
     } catch (error) {
       console.error('Failed to load courses:', error);
@@ -248,7 +248,7 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
     }
 
     try {
-      const result = await deleteDeck(courseId);
+      const result = await deleteCourse(courseId);
       if (result.success) {
         // Reload courses list
         await loadCourses();
@@ -363,8 +363,41 @@ function SettingsPanel({ isOpen, onClose, currentCourseId, onCourseChange }) {
               <option value="local" disabled={!whisperAvailable || !ffmpegAvailable}>
                 Local (Whisper.cpp) {(!whisperAvailable || !ffmpegAvailable) && '(Not available)'}
               </option>
-              <option value="cloud">Cloud</option>
+              <option value="hubert-llama">HuBERT + Llama 3 (Multimodal)</option>
+              <option value="cloud">Cloud (OpenAI Whisper API)</option>
             </select>
+            
+            {/* API Key Input for Cloud STT */}
+            {settings.sttProvider === 'cloud' && (
+              <div style={{ marginTop: '12px' }}>
+                <label className="settings-label" style={{ display: 'block', marginBottom: '4px' }}>
+                  OpenAI API Key
+                  <input
+                    type="password"
+                    placeholder="Enter OpenAI API key (for Whisper API)"
+                    onBlur={async (e) => {
+                      if (e.target.value) {
+                        await handleSaveApiKey('openai', e.target.value);
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      background: '#222',
+                      color: '#fff',
+                      border: '1px solid #444',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                      marginTop: '4px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </label>
+                <p style={{ fontSize: '11px', color: '#888', marginTop: '4px' }}>
+                  Uses OpenAI Whisper API (Robust Speech Recognition via Large-Scale Weak Supervision)
+                </p>
+              </div>
+            )}
             
             {/* Diagnostics: Show ffmpeg status */}
             {healthStatus && (

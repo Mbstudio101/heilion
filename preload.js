@@ -6,7 +6,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // File operations
   importPPTX: () => ipcRenderer.invoke('import-pptx'),
+  importCourseFromPath: (filePath) => ipcRenderer.invoke('course:importPptxFromPath', filePath),
   copyPPTXToStorage: (sourcePath, courseId) => ipcRenderer.invoke('copy-pptx-to-storage', sourcePath, courseId),
+  searchRelevantSlides: (courseId, query, limit) => ipcRenderer.invoke('course:searchRelevantSlides', courseId, query, limit),
   
   // Provider checks
   checkOllama: () => ipcRenderer.invoke('check-ollama'),
@@ -14,6 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Audio/Speech
     runWhisper: (audioPath, modelName) => ipcRenderer.invoke('run-whisper', audioPath, modelName),
+  transcribeWithOpenAI: (audioPath, apiKey) => ipcRenderer.invoke('transcribe-with-openai', audioPath, apiKey),
+  transcribeWithHubertLlama: (audioPath, context) => ipcRenderer.invoke('transcribe-with-hubert-llama', audioPath, context),
+  checkHubertLlama: () => ipcRenderer.invoke('check-hubert-llama'),
   ttsSpeak: (text, provider) => ipcRenderer.invoke('tts-speak', text, provider),
   getMicPermission: () => ipcRenderer.invoke('get-mic-permission'),
   streamAudioToWake: (audioData) => ipcRenderer.send('stream-audio-to-wake', audioData),
@@ -21,6 +26,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Wake word
   onWakeWordStatus: (callback) => {
     ipcRenderer.on('wake-word-status', (event, data) => callback(data));
+  },
+  removeWakeWordStatusListener: (callback) => {
+    ipcRenderer.removeListener('wake-word-status', callback);
   },
   
   // API Keys (keytar)

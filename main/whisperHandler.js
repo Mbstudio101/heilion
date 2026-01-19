@@ -107,8 +107,8 @@ async function runWhisperTranscription(audioPath, modelName = null) {
     if (!whisperBin) {
       return { 
         success: false, 
-        error: 'Whisper.cpp not found. Please install whisper.cpp or use cloud STT.',
-        suggestion: 'Install whisper.cpp: https://github.com/ggerganov/whisper.cpp'
+        error: '',
+        suggestion: ''
       };
     }
 

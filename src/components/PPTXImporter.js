@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { importDeckFromPPTX } from '../utils/deckManager';
+import { importCourseFromPPTX } from '../utils/courseManager';
 import './PPTXImporter.css';
 
 function PPTXImporter({ onImportComplete, onCancel }) {
@@ -12,18 +12,17 @@ function PPTXImporter({ onImportComplete, onCancel }) {
     
     try {
       setProgress('Opening file dialog...');
-      const result = await importDeckFromPPTX();
-      
+      const result = await importCourseFromPPTX();
       if (!result.success) {
         throw new Error(result.error || 'Import failed');
       }
       
       setProgress('Parsing slides and generating study pack...');
-      // importDeckFromPPTX already handles everything: parsing, saving, building study pack, generating questions
+      // importCourseFromPPTX already handles everything: parsing, saving, building study pack
       
       setProgress('Import complete!');
       setTimeout(() => {
-        onImportComplete(result.deckId);
+        onImportComplete(result.courseId || result.deckId);
       }, 500);
     } catch (error) {
       console.error('Import failed:', error);

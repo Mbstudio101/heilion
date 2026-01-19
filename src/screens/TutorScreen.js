@@ -5,7 +5,7 @@ import SettingsPanel from '../components/SettingsPanel';
 import AIOrb from '../components/AIOrb';
 import UpdateNotification from '../components/UpdateNotification';
 import { TutorEngine, TUTOR_STATES } from '../utils/tutorEngine';
-import { importDeckFromPPTX, getDeckLibrary } from '../utils/deckManager';
+import { importCourseFromPPTX, getCourseLibrary } from '../utils/courseManager';
 import { beginActiveCapture, cancelActiveCapture } from '../utils/audioCaptureManager';
 import { transcribe } from '../utils/sttManager';
 import { startWakeListener, stopWakeListener } from '../utils/wakeWordManager';
@@ -16,6 +16,7 @@ import { gradeAnswer } from '../utils/tutorSession';
 import './TutorScreen.css';
 
 function TutorScreen() {
+  const initializedRef = useRef(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [transcript, setTranscript] = useState('');
@@ -110,12 +111,44 @@ function TutorScreen() {
       const transcribeResult = await transcribe(filePath, currentSettings);
       
       if (!transcribeResult.success) {
-        // Show helpful error message without throwing (allows user to continue)
-        const errorMsg = transcribeResult.error || 'Transcription failed';
+        // Only show error if there's a meaningful error message
+        const errorMsg = transcribeResult.error || '';
         const suggestion = transcribeResult.suggestion || '';
-        setStatus(`⚠ ${errorMsg}${suggestion ? ' - ' + suggestion : ''}`);
+        
+        // If error is empty (silent failure), just reset state without showing message
+        if (!errorMsg && !suggestion) {
+          setStatus('');
+          setIsThinking(false);
+          eventBus.emit(EVENTS.THINKING_ENDED);
+          return;
+        }
+        
+        // Show error message only if it exists
+        let displayMessage = `⚠ ${errorMsg}`;
+        if (suggestion) {
+          displayMessage += '\n\n' + suggestion.replace(/\\n/g, '\n');
+        }
+        
+        setStatus(displayMessage);
         setIsThinking(false);
         eventBus.emit(EVENTS.THINKING_ENDED);
+        
+        // If it's a setup issue, suggest opening settings
+        if (errorMsg.includes('not installed') || errorMsg.includes('unavailable')) {
+          setTimeout(() => {
+            const openSettings = confirm(
+              'Would you like to open Settings to configure Speech-to-Text?\n\n' +
+              'You can:\n' +
+              '• Switch to Cloud STT (requires OpenAI API key)\n' +
+              '• Use HuBERT + Llama 3 (if configured)\n' +
+              '• Or install whisper.cpp locally'
+            );
+            if (openSettings) {
+              setSettingsOpen(true);
+            }
+          }, 500);
+        }
+        
         // Don't throw - allow user to try again or configure settings
         return;
       }
@@ -241,7 +274,7 @@ function TutorScreen() {
     }
   }, [tutorEngine]);
 
-  const initializeTutor = useCallback((courseId) => {
+  const initializeTutor = useCallback((courseId, autoStart = false) => {
     const currentSettings = settingsRef.current;
     const persona = currentSettings.selectedPersona || 'Virgo';
     const teacherStyle = currentSettings.teacherStyle || 'friendly';
@@ -251,20 +284,25 @@ function TutorScreen() {
     setTutorEngine(engine);
     setCurrentCourseId(courseId);
     
-    // Start with intro
-    handleProfessorNextStep(engine);
+    // Only auto-start if explicitly requested (e.g., after import)
+    // Don't auto-start on app load - wait for user interaction
+    if (autoStart) {
+      handleProfessorNextStep(engine);
+    }
   }, [handleProfessorNextStep]);
 
   const loadActiveCourse = useCallback(async () => {
     try {
-      const result = await getDeckLibrary();
-      if (result.success && result.decks && result.decks.length > 0) {
+      const result = await getCourseLibrary();
+      if (result.success && result.courses && result.courses.length > 0) {
         // Use most recent course as active
-        const activeCourse = result.decks[0];
+        const activeCourse = result.courses[0];
         // Only initialize if course changed
+        // Don't auto-start - just set the course as active, wait for user interaction
         if (currentCourseId !== activeCourse.id) {
           setCurrentCourseId(activeCourse.id);
-          initializeTutor(activeCourse.id);
+          // Initialize tutor silently (no auto-start)
+          initializeTutor(activeCourse.id, false);
         }
       }
     } catch (error) {
@@ -274,6 +312,12 @@ function TutorScreen() {
 
   // Initialize app on mount
   useEffect(() => {
+    // Prevent duplicate initialization
+    if (initializedRef.current) {
+      return;
+    }
+    initializedRef.current = true;
+    
     // Bootstrap app
     bootstrapApp().then((result) => {
       if (result.health) {
@@ -301,6 +345,18 @@ function TutorScreen() {
     const unsubscribeWake = eventBus.on(EVENTS.WAKE_TRIGGERED, handleWakeWordTriggered);
     const unsubscribeCapture = eventBus.on(EVENTS.CAPTURE_STOPPED, handleCaptureStopped);
     const unsubscribeSpeakStart = eventBus.on(EVENTS.SPEAK_START, () => setIsSpeaking(true));
+    
+    // PATCH 7: Course import event listeners
+    const unsubscribeCourseReady = eventBus.on(EVENTS.COURSE_READY, async ({ courseId }) => {
+      // Natural greeting after import
+      if (courseId && tutorEngine) {
+        const greeting = "Got it — I loaded your slides. Ask me anything about them.";
+        await speak(greeting, {
+          persona: currentSettings.selectedPersona || 'Virgo',
+          voice: currentSettings.selectedVoice || 'default'
+        }, currentSettings);
+      }
+    });
     
     // BARGE-IN: Stop TTS when user starts speaking while TTS is playing
     // Setup continuous mic monitoring for barge-in (even when not recording)
@@ -438,8 +494,14 @@ function TutorScreen() {
       unsubscribeSpeakStartForBargeIn();
       unsubscribeCaptureStartedForBargeIn();
       unsubscribeSpeakEnd();
+      unsubscribeCourseReady();
+      
+      // Remove wake word status listener
+      if (window.electronAPI && window.electronAPI.removeWakeWordStatusListener) {
+        window.electronAPI.removeWakeWordStatusListener(wakeStatusHandler);
+      }
     };
-  }, [handleWakeWordTriggered, handleCaptureStopped, handleStartRecording, loadActiveCourse]);
+  }, []); // Empty deps - only run once on mount to prevent duplicate registrations
 
   // Drag & Drop handlers
   const handleDragEnter = (e) => {
@@ -480,24 +542,30 @@ function TutorScreen() {
   };
 
   const handlePPTXUpload = async (file) => {
+    // PATCH 1: Get file path from File object
+    // In Electron drag-drop, File object has .path property
     setStatus('Importing PPTX...');
     setIsThinking(true);
 
     try {
-      // Save file temporarily and import
-      const result = await importDeckFromPPTX();
+      // PATCH 1: Import from path (use file.path if available from drag-drop)
+      const filePath = file?.path || null;
+      const result = await importCourseFromPPTX(filePath);
       
       if (!result.success) {
         throw new Error(result.error || 'Import failed');
       }
 
-      // Initialize tutor with new course
-      initializeTutor(result.deckId);
+      // Initialize tutor with new course (auto-start after import greeting)
+      // The greeting will be spoken by the COURSE_READY event listener
+      // Then we'll auto-start the tutor session
+      initializeTutor(result.courseId, false);
       
-      setStatus('Course imported. Starting tutor session...');
+      setStatus('Course imported. Ready to chat!');
     } catch (error) {
       console.error('PPTX upload failed:', error);
       setStatus(`Import failed: ${error.message}`);
+      eventBus.emit(EVENTS.ORB_STATE, 'idle');
     } finally {
       setIsThinking(false);
     }
@@ -618,7 +686,8 @@ function TutorScreen() {
         }}
         currentCourseId={currentCourseId}
         onCourseChange={(courseId) => {
-          initializeTutor(courseId);
+          // Change course silently - don't auto-start, wait for user interaction
+          initializeTutor(courseId, false);
         }}
       />
       
